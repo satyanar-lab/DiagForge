@@ -1,0 +1,20 @@
+{
+  "dtcs": [
+    {
+      "dtc_code": "P0300",
+      "standard": "obd2",
+      "timestamp_first_us": 480000,
+      "timestamp_latest_us": 690000,
+      "occurrence_count": 1,
+      "description": "Random/Multiple Cylinder Misfire Detected"
+    },
+    {
+      "dtc_code": "U0100",
+      "standard": "uds",
+      "status_byte": 47,
+      "timestamp_first_us": 1200000,
+      "timestamp_latest_us": 1850000,
+      "occurrence_count": 3
+    }
+  ]
+}

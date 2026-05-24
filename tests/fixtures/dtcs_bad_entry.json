@@ -1,0 +1,11 @@
+{
+  "dtcs": [
+    {
+      "dtc_code": "P0300",
+      "standard": "obd2",
+      "timestamp_first_us": 1000,
+      "timestamp_latest_us": 500,
+      "occurrence_count": 1
+    }
+  ]
+}
