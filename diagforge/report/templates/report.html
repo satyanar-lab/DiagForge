@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DiagForge report {{ report.report_id }}</title>
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --muted: #666;
+    --line: #d0d0d0;
+    --accent: #b8430a;
+    --low: #f0e0c0;
+    --med: #f0b97a;
+    --hi: #d96528;
+  }
+  body { font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         margin: 24px; color: var(--fg); max-width: 1000px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 18px; margin: 24px 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+  h3 { font-size: 15px; margin: 14px 0 6px; }
+  .meta { color: var(--muted); font-size: 12px; margin-bottom: 18px; }
+  .meta code { background: #f3f3f3; padding: 1px 4px; border-radius: 3px; }
+  .dtc-card { border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px;
+              margin-bottom: 20px; background: #fcfcfc; }
+  .dtc-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+              font-weight: 600; color: var(--accent); }
+  ul.findings { padding-left: 18px; }
+  ul.findings li { margin-bottom: 4px; }
+  .hyp { border-left: 3px solid var(--line); padding: 6px 10px; margin: 8px 0;
+         background: #fafafa; }
+  .hyp.h-rank-1 { border-left-color: var(--hi); }
+  .conf { display: inline-block; padding: 1px 6px; border-radius: 10px;
+          font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .conf-low { background: var(--low); }
+  .conf-medium { background: var(--med); color: white; }
+  .conf-high { background: var(--hi); color: white; }
+  .pattern { background: #eef5fb; padding: 8px 12px; border-radius: 5px;
+             margin-top: 6px; border: 1px solid #cfdbe5; }
+  table { border-collapse: collapse; margin-top: 4px; }
+  table td, table th { padding: 3px 8px; border-bottom: 1px solid #ececec;
+                       font-size: 12px; text-align: left; vertical-align: top; }
+  code.evidence { background: #fff3e0; padding: 1px 4px; border-radius: 3px;
+                  font-family: ui-monospace, monospace; font-size: 12px; }
+  .footer { margin-top: 30px; color: var(--muted); font-size: 11px;
+            border-top: 1px solid var(--line); padding-top: 8px; }
+</style>
+</head>
+<body>
+
+<h1>DiagForge — Diagnostic Evidence Report</h1>
+<div class="meta">
+  <code>report_id={{ report.report_id }}</code> &middot;
+  schema {{ report.schema_version }} &middot;
+  generated {{ report.created_at.isoformat() }} &middot;
+  tool {{ report.tool.name }} {{ report.tool.version }}
+</div>
+
+<h2>Inputs</h2>
+<table>
+  <tr><th>trace</th>
+      <td><code>{{ report.input.trace_file.path }}</code> ({{ report.input.trace_file.format }})</td>
+      <td><code>{{ report.input.trace_file.sha256[:12] }}…</code></td></tr>
+  <tr><th>dtcs</th>
+      <td><code>{{ report.input.dtc_file.path }}</code></td>
+      <td><code>{{ report.input.dtc_file.sha256[:12] }}…</code></td></tr>
+  {% if report.input.dbc_file and report.input.dbc_file.path %}
+  <tr><th>dbc</th>
+      <td><code>{{ report.input.dbc_file.path }}</code></td>
+      <td><code>{{ (report.input.dbc_file.sha256 or '')[:12] }}…</code></td></tr>
+  {% endif %}
+</table>
+
+<h2>Analyses ({{ report.analyses | length }})</h2>
+
+{% for a in report.analyses %}
+<div class="dtc-card">
+  <h3>
+    <span class="dtc-code">{{ a.dtc.code }}</span>
+    <small style="color: var(--muted);">[{{ a.dtc.standard }}]</small>
+    {% if a.dtc.description %} &mdash; {{ a.dtc.description }}{% endif %}
+  </h3>
+  <div class="meta">
+    occurrences: {{ a.dtc.occurrence_count or 1 }};
+    first seen: {{ a.dtc.first_seen_us or '-' }} µs;
+    last seen: {{ a.dtc.last_seen_us or '-' }} µs
+  </div>
+
+  <h4>Deterministic findings</h4>
+  <ul class="findings">
+    {% for f in a.pattern_features.notable_findings %}
+    <li><code class="evidence">{{ f }}</code></li>
+    {% endfor %}
+  </ul>
+
+  <h4>Hypotheses</h4>
+  {% for h in a.diagnostic_result.hypotheses %}
+  <div class="hyp h-rank-{{ h.rank }}">
+    <div>
+      <strong>#{{ h.rank }}. {{ h.description }}</strong>
+      <span class="conf conf-{{ h.confidence }}">{{ h.confidence }}</span>
+    </div>
+    <p>{{ h.reasoning }}</p>
+    <div><em>Evidence:</em>
+      {% for ev in h.evidence %}<code class="evidence">{{ ev }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+    </div>
+    {% if h.suggested_pattern_id %}
+    <div><em>Suggested mitigation:</em> <code>{{ h.suggested_pattern_id }}</code></div>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  {% if a.mitigation_matches %}
+  <h4>Mitigation patterns</h4>
+  {% for m in a.mitigation_matches %}
+  <div class="pattern">
+    <strong>{{ m.pattern_name }}</strong>
+    <code>({{ m.pattern_id }})</code>
+    {% if m.parameter_suggestions %}
+    <h5>Parameters</h5>
+    <table>
+      <tr><th>name</th><th>rationale</th></tr>
+      {% for p in m.parameter_suggestions %}
+      <tr><td><code>{{ p.name }}</code></td><td>{{ p.rationale }}</td></tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+    {% if m.verification_steps %}
+    <h5>Verification</h5>
+    <ol>
+      {% for v in m.verification_steps %}<li>{{ v }}</li>{% endfor %}
+    </ol>
+    {% endif %}
+    {% if m.standards_references %}
+    <h5>Standards</h5>
+    <ul>
+      {% for s in m.standards_references %}<li>{{ s }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% endif %}
+
+  <h4>Model</h4>
+  <div class="meta">
+    {{ a.diagnostic_result.model }} ({{ a.diagnostic_result.model_version }})
+    prompt template <code>{{ a.diagnostic_result.prompt_template_version }}</code>
+    {% if a.diagnostic_result.prompt_hash %}
+    prompt hash <code>{{ a.diagnostic_result.prompt_hash[:12] }}…</code>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
+
+<div class="footer">
+  Generated by DiagForge {{ report.tool.version }}. Developer evidence only —
+  this report does <strong>not</strong> replace OEM diagnostic equipment or
+  certified workshop verdicts.
+</div>
+
+</body>
+</html>
