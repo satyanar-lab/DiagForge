@@ -1,0 +1,153 @@
+# DiagForge - Mitigation Pattern Library (Starter Set)
+#
+# This file is the unique IP of DiagForge. Each pattern documents a recurring
+# fault-handling strategy applied to false-positive or transient DTCs in
+# production ECU software.
+#
+# License: CC-BY-4.0
+#
+# Format guidance:
+# - Every pattern has a stable pattern_id (snake_case, used as foreign key)
+# - when_applies: bullet list of observable conditions
+# - parameters: tunable values with rules for suggesting initial values
+# - verification: how to confirm the fix works (test bench / HIL / simulation)
+# - standards: clauses or standards referenced (must be publicly verifiable)
+
+schema_version: "1.0.0"
+
+patterns:
+
+  - pattern_id: "duration_qualified_debounce"
+    name: "Duration-qualified debounce"
+    short_description: >
+      Require a signal to remain in the new state for a qualification time
+      before accepting the transition. Filters out bouncing or transient
+      noise on discrete inputs.
+    when_applies:
+      - "Discrete signal (e.g. ignition switch, door switch, brake switch) toggles multiple times within a short window"
+      - "DTC fires on the first observed transition without any confirmation interval"
+      - "Bounce/transition interval is shorter than typical signal sample period"
+    parameters:
+      - name: qualification_time_ms
+        suggestion_rule: "max observed bounce interval x 2, rounded up to nearest 5ms; typical range 5-20ms"
+        type: integer
+      - name: confirmation_count
+        suggestion_rule: "Default 1. Raise to 2 if noise persists across the qualification window."
+        type: integer
+    verification:
+      - "Inject pulse shorter than qualification_time_ms; verify no DTC fires and no state transition is committed."
+      - "Inject pulse equal to qualification_time_ms; verify state transitions exactly once and DTC behavior matches expectation."
+      - "Inject pulse longer than qualification_time_ms; verify timely state transition without extra latency."
+      - "Stress-test with random pulse trains; verify zero false transitions over 1000 cycles on bench."
+    standards:
+      - "ISO 14229-1:2020 11.3 (event qualification and fault confirmation)"
+      - "ISO 26262-6:2018 9 (software unit verification - robustness against noise)"
+
+  - pattern_id: "dematuration_timer"
+    name: "Dematuration / fault-clear timer"
+    short_description: >
+      Require a fault condition to remain absent for a confirmed clear-time
+      before the DTC is cleared. Prevents oscillating set/clear cycles on
+      analog faults near a threshold.
+    when_applies:
+      - "Analog signal (voltage, current, temperature) qualifies and clears a fault repeatedly"
+      - "Signal value is near the fault threshold with bounded noise"
+      - "DTC count increments rapidly without an underlying root-cause change"
+    parameters:
+      - name: dematuration_time_ms
+        suggestion_rule: "5x the dominant noise period observed near the threshold; typical 100-500ms"
+        type: integer
+      - name: clear_threshold_offset
+        suggestion_rule: "Apply hysteresis: clear threshold should differ from set threshold by >= 2x peak noise amplitude"
+        type: float
+    verification:
+      - "Hold signal at fault set-threshold for confirmation_time; verify DTC sets exactly once."
+      - "Drop signal below clear_threshold for less than dematuration_time_ms; verify DTC does NOT clear."
+      - "Drop signal below clear_threshold for >= dematuration_time_ms; verify DTC clears."
+      - "Oscillate signal across threshold with bounded noise; verify no false set/clear cycling."
+    standards:
+      - "ISO 14229-1:2020 11.3 (status bit transitions and aging)"
+      - "ISO 26262-6:2018 9 (defensive measures against transient faults)"
+
+  - pattern_id: "retry_state_machine_nvm"
+    name: "Retry state machine with NVM persistence"
+    short_description: >
+      Wrap NVM (EEPROM/Flash) read or write operations in a small state
+      machine that retries on transient errors and persists state across
+      power cycles, with a maximum retry count before declaring a hard fault.
+    when_applies:
+      - "DTC indicates data loss, checksum failure, or NVM read/write error"
+      - "Fault is intermittent and correlates with power-cycle events"
+      - "Single-attempt NVM access without retry logic"
+    parameters:
+      - name: max_retries
+        suggestion_rule: "3 by default; 5 if NVM device datasheet specifies higher transient error rate"
+        type: integer
+      - name: retry_delay_ms
+        suggestion_rule: ">= NVM tWR + 1ms; typical 5-20ms"
+        type: integer
+      - name: state_persistence_strategy
+        suggestion_rule: "Store retry counter in dedicated NVM block; clear after successful operation"
+        type: string
+    verification:
+      - "Inject single transient NVM error; verify successful retry and no DTC."
+      - "Inject persistent NVM error; verify DTC after max_retries and graceful degradation."
+      - "Power-cycle during a write; verify retry state recovers correctly and no data corruption."
+      - "Stress: 1000 random power cycles during NVM operations; zero data loss."
+    standards:
+      - "ISO 26262-6:2018 9.4.3 (control flow and data flow analysis)"
+      - "ISO 26262-5:2018 10 (HW-SW interfaces - non-volatile memory)"
+
+  - pattern_id: "plausibility_check_redundant_signals"
+    name: "Plausibility check across redundant signals"
+    short_description: >
+      Compare a signal against a redundant or related signal (e.g. switch
+      state vs. sensor reading, or two redundant sensors). Set the DTC only
+      when the disagreement persists and is outside expected tolerance.
+    when_applies:
+      - "DTC fires based on a single signal when a redundant or correlated signal is available"
+      - "False positives occur on legitimate edge cases that one signal sees but the other doesn't"
+      - "Sensor-vs-switch or sensor-vs-sensor architecture with no cross-check"
+    parameters:
+      - name: tolerance_window_ms
+        suggestion_rule: "Larger than worst-case signal propagation delay; typical 20-100ms"
+        type: integer
+      - name: disagreement_threshold
+        suggestion_rule: "Domain-specific. For boolean signals: 1 cycle. For analog: cover sensor tolerances + bus latency."
+        type: float
+    verification:
+      - "Drive both signals to agreeing states; verify no DTC."
+      - "Drive signals to disagreement within tolerance_window_ms; verify no DTC."
+      - "Hold disagreement beyond tolerance_window_ms; verify DTC sets."
+      - "Inject realistic sensor noise on one signal; verify no false DTC."
+    standards:
+      - "ISO 26262-9:2018 6 (analysis of dependent failures)"
+      - "ISO 26262-5:2018 9 (hardware safety analysis)"
+
+  - pattern_id: "boundary_condition_guard"
+    name: "Boundary-condition guard / bounds enforcement"
+    short_description: >
+      Insert explicit range and array-bounds checks at input boundaries to
+      catch off-by-one errors, out-of-range values, and array overflows that
+      manifest as corrupted DTC data or spurious fault codes.
+    when_applies:
+      - "DTC fields contain implausible values (e.g. signal_id beyond defined range)"
+      - "Fault data shows pattern consistent with buffer overrun or off-by-one"
+      - "Defect found in coverage testing as array-OOB or boundary violation"
+    parameters:
+      - name: bounds_action
+        suggestion_rule: "Clamp + log for non-safety-critical; clamp + DTC for safety-relevant; halt + safe-state for ASIL-D"
+        type: string
+      - name: assertion_strategy
+        suggestion_rule: "Compile-time where possible (static_assert); runtime checks must be MISRA-clean"
+        type: string
+    verification:
+      - "Inject input at lower bound - 1; verify guard catches it."
+      - "Inject input at upper bound + 1; verify guard catches it."
+      - "Inject input at exactly lower and upper bounds; verify both accepted."
+      - "Run static analysis (cppcheck/MISRA addon, clang-tidy) - zero array-bounds warnings on the affected code."
+      - "If unit tests exist, ensure coverage hits both bounds explicitly."
+    standards:
+      - "MISRA C:2025 Rule 18.1 (pointer arithmetic on arrays)"
+      - "ISO 26262-6:2018 9.4.3 (defensive programming)"
+      - "CWE-119 (improper restriction of operations within memory bounds)"
