@@ -1,0 +1,108 @@
+[tool.poetry]
+name = "diagforge"
+version = "0.0.1"
+description = "Open-source root-cause co-pilot for vehicle diagnostic trouble codes"
+authors = ["satyanar-lab <satyanar@mtu.edu>"]
+license = "MIT"
+readme = "claude/README.md"
+packages = [{ include = "diagforge" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+click = "^8.1.7"
+pydantic = "^2.7"
+"python-can" = "^4.4"
+cantools = "^39.4"
+anthropic = "^0.39"
+pyyaml = "^6.0.1"
+jinja2 = "^3.1.4"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.2"
+pytest-cov = "^5.0"
+hypothesis = "^6.100"
+ruff = "^0.5"
+black = "^24.4"
+mypy = "^1.10"
+types-pyyaml = "^6.0"
+
+[tool.poetry.scripts]
+diagforge = "diagforge.cli:main"
+
+[build-system]
+requires = ["poetry-core>=1.8.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle errors
+  "W",   # pycodestyle warnings
+  "F",   # pyflakes
+  "I",   # isort
+  "B",   # flake8-bugbear
+  "UP",  # pyupgrade
+  "RUF", # ruff-specific
+  "SIM", # flake8-simplify
+  "C4",  # comprehensions
+]
+ignore = [
+  "E501",  # line length handled by black
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unreachable = true
+exclude = [
+  "examples/p0300_intermittent_misfire/generate_trace\\.py",
+]
+
+[[tool.mypy.overrides]]
+module = ["can.*", "cantools.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --cov=diagforge --cov-report=term-missing"
+markers = [
+  "integration: end-to-end tests that exercise the CLI",
+  "live_api: tests that hit the real Anthropic API (require ANTHROPIC_API_KEY)",
+]
+filterwarnings = [
+  "ignore::DeprecationWarning:can.*",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["diagforge"]
+omit = [
+  "diagforge/__init__.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+  "pragma: no cover",
+  "raise NotImplementedError",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]
