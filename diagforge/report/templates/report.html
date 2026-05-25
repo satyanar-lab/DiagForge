@@ -72,6 +72,20 @@
   {% endif %}
 </table>
 
+{% if report.cross_dtc_findings %}
+<h2>Cross-DTC findings</h2>
+<ul>
+  {% for f in report.cross_dtc_findings %}
+  <li>
+    <strong>{{ f.type | replace('_', ' ') }}</strong>
+    <code>{{ f.dtc_codes | join(' / ') }}</code>:
+    {{ f.description }}
+    {% if f.delta_us %}<small style="color: var(--muted);">(Δ {{ (f.delta_us / 1000) | round(0) | int }} ms)</small>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
 <h2>Analyses ({{ report.analyses | length }})</h2>
 
 {% for a in report.analyses %}

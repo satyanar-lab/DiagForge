@@ -180,6 +180,19 @@ class DtcAnalysis(BaseModel):
     mitigation_matches: list[MitigationMatch] = Field(default_factory=list)
 
 
+CrossDtcType = Literal["co_occurring", "causal_ordering"]
+
+
+class CrossDtcFinding(BaseModel):
+    """One cross-DTC relationship surfaced by `cross_dtc.detect_findings`."""
+
+    model_config = ConfigDict(extra="forbid")
+    type: CrossDtcType
+    dtc_codes: list[str] = Field(min_length=2)
+    description: str
+    delta_us: int | None = None
+
+
 class Report(BaseModel):
     """Top-level diagnostic evidence report."""
 
@@ -191,6 +204,7 @@ class Report(BaseModel):
     tool: ToolInfo
     input: InputInfo
     analyses: list[DtcAnalysis] = Field(default_factory=list)
+    cross_dtc_findings: list[CrossDtcFinding] = Field(default_factory=list)
 
     @field_validator("report_id")
     @classmethod

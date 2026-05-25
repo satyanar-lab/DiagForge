@@ -260,6 +260,16 @@ if "result" in st.session_state:
     st.markdown("---")
     st.subheader("Results")
 
+    if result.report.cross_dtc_findings:
+        st.markdown("**Cross-DTC findings**")
+        for cf in result.report.cross_dtc_findings:
+            badge = "🔗" if cf.type == "co_occurring" else "→"
+            st.markdown(
+                f"{badge} **{cf.type.replace('_', ' ')}** · "
+                f"`{' / '.join(cf.dtc_codes)}` — {cf.description}"
+            )
+        st.markdown("---")
+
     dl_a, dl_b, dl_c = st.columns(3)
     with dl_a:
         st.download_button(

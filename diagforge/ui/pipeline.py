@@ -14,6 +14,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from diagforge.analyzer.cross_dtc import detect_findings as detect_cross_dtc_findings
 from diagforge.analyzer.timing import build_pattern_features, slice_events_for_dtc
 from diagforge.diagnostic.agent import AnthropicClient, DiagnosticAgent, RealAnthropicClient
 from diagforge.ingestion.dtc_json import DtcJsonParser
@@ -117,6 +118,10 @@ def run_pipeline(
         ),
     )
     emitter = ReportEmitter(out_dir, input_info)
+    cross = detect_cross_dtc_findings(dtcs)
+    if cross:
+        progress(f"Detected {len(cross)} cross-DTC relationship(s)")
+        emitter.set_cross_dtc_findings(cross)
     window_us = max(50_000, window_ms * 1_000)
 
     for i, dtc in enumerate(dtcs, 1):

@@ -57,6 +57,24 @@
     "analyses": {
       "type": "array",
       "items": { "$ref": "#/$defs/dtcAnalysis" }
+    },
+    "cross_dtc_findings": {
+      "type": "array",
+      "description": "Optional. Multi-DTC correlation findings — co-occurrence or causal ordering between two or more DTCs in the snapshot.",
+      "items": {
+        "type": "object",
+        "required": ["type", "dtc_codes", "description"],
+        "properties": {
+          "type": { "enum": ["co_occurring", "causal_ordering"] },
+          "dtc_codes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 2
+          },
+          "description": { "type": "string" },
+          "delta_us": { "type": "integer" }
+        }
+      }
     }
   },
   "$defs": {

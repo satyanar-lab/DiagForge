@@ -23,6 +23,7 @@ from diagforge.report.charts import render_signal_chart
 from diagforge.report.html import render_report_html
 from diagforge.report.models import (
     SCHEMA_VERSION,
+    CrossDtcFinding,
     DtcAnalysis,
     InputInfo,
     Report,
@@ -74,8 +75,13 @@ class ReportEmitter:
         self._input = input_info
         self._analyses: list[DtcAnalysis] = []
         self._event_slices: list[list[TraceEvent]] = []
+        self._cross_dtc_findings: list[CrossDtcFinding] = []
         self._report_id = _uuid7()
         self._created_at = dt.datetime.now(tz=dt.UTC)
+
+    def set_cross_dtc_findings(self, findings: list[CrossDtcFinding]) -> None:
+        """Attach multi-DTC correlation findings. Replaces any previously set."""
+        self._cross_dtc_findings = list(findings)
 
     @property
     def report_id(self) -> str:
@@ -100,6 +106,7 @@ class ReportEmitter:
             tool=ToolInfo(version=__version__),
             input=self._input,
             analyses=self._analyses,
+            cross_dtc_findings=self._cross_dtc_findings,
         )
 
         report_json_path = self._out_dir / _REPORT_JSON

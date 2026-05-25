@@ -11,6 +11,7 @@ import click
 
 from diagforge import __version__
 from diagforge._logging import configure_logging, get_logger
+from diagforge.analyzer.cross_dtc import detect_findings as detect_cross_dtc_findings
 from diagforge.analyzer.timing import build_pattern_features, slice_events_for_dtc
 from diagforge.diagnostic.agent import DiagnosticAgent, RealAnthropicClient
 from diagforge.ingestion.dtc_json import DtcJsonParser
@@ -141,6 +142,10 @@ def analyze(
         ),
     )
     emitter = ReportEmitter(out_dir, input_info)
+    cross_dtc = detect_cross_dtc_findings(dtcs)
+    if cross_dtc:
+        _log.info("found %d cross-DTC relationship(s)", len(cross_dtc))
+        emitter.set_cross_dtc_findings(cross_dtc)
 
     window_us = max(50_000, window_ms * 1_000)
     for dtc in dtcs:
