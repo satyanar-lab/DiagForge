@@ -18,7 +18,7 @@ defending the work in interviews.
 | T0L.7a | `2499247` | Report emitter, sha256 manifest, Jinja2 HTML template |
 | T0L.7b | `e70601b` | CLI analyze command wired through all five layers |
 | T0L.7c+d | `9779109` | P0300 demo case + integration test, UUIDv7 generator fix |
-| T0L.8 | _this commit_ | Polish, ADRs, README quick-start update, AI-attribution sweep |
+| T0L.8 | `6575706` | Polish, ADRs, README quick-start update, AI-attribution sweep |
 
 All commits are conventional-style, ticket-referenced, no AI attribution
 anywhere (verified via `grep`).
