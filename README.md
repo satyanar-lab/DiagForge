@@ -127,21 +127,26 @@ make demo                       # runs the P0300 example end-to-end
 
 ## Mitigation pattern library
 
-DiagForge ships with a curated library of fault-handling patterns commonly
-applied to false-positive DTCs in production ECU software. Two of the five
-patterns derive concrete numeric parameter suggestions directly from the
-deterministic analyzer's findings; the remaining three emit
-parameter rationale text with values left to the Phase 0 expansion.
+DiagForge ships with a curated library of **10 fault-handling patterns**
+commonly applied to false-positive DTCs in production ECU software. A
+subset derive concrete numeric parameter suggestions directly from the
+deterministic analyzer's findings; the rest emit parameter rationale text
+with values pending a Phase 0+ value-computer per pattern.
 
-| Pattern | When it applies | Computed values in v0.1.0 |
+| Pattern | When it applies | Computed values |
 |---|---|---|
 | Duration-qualified debounce | Signal toggles within the noise window of a discrete input | `qualification_time_ms` = `max(dropout_durations) × 2`, rounded up to nearest 5 ms; `confirmation_count` = 1 |
-| Plausibility check | Mismatch between redundant signals (e.g. switch + sensor) | `tolerance_window_ms` = `max(dropout_durations) + 20` (buffer for sensor propagation + bus latency) |
-| Dematuration timer | Analog fault qualifies and clears repeatedly before fault confirmation | rationale only (threshold-crossing analysis is a Phase 0 task) |
-| Retry state machine w/ NVM persistence | Data loss across power cycles or transient NVM errors | rationale only (needs NVM device characteristics) |
-| Boundary-condition guard | Off-by-one or array-OOB symptoms in fault data | rationale only (needs code-structure metadata) |
+| Plausibility check (redundant signals) | Mismatch between redundant signals (e.g. switch + sensor) | `tolerance_window_ms` = `max(dropout_durations) + 20` |
+| Dematuration timer | Analog fault qualifies and clears repeatedly before fault confirmation | `dematuration_time_ms` ≈ 5 × dominant oscillation period (T0.5 demo) |
+| Communication retry state machine | Lost-comm U-codes from brief bus dropouts | `timeout_ms`, `max_consecutive_misses` from observed gaps (T0.4 demo) |
+| Oscillation hysteresis | Signal chatters across a single threshold; dematuration alone insufficient | rationale only |
+| Signal freshness / timeout check | Stale received signal feeding safety logic | rationale only |
+| Gradient / rate-of-change limit | Physically-impossible single-sample jumps | rationale only |
+| Cross-ECU consensus / voting | Redundant publishers disagree | rationale only |
+| Retry state machine w/ NVM persistence | Data loss across power cycles or transient NVM errors | rationale only |
+| Boundary-condition guard | Off-by-one or array-OOB symptoms in fault data | rationale only |
 
-Each pattern is parameterised and citable — see
+Each pattern is parameterised, verifiable, and cites a public ISO/SAE clause — see
 [`claude/mitigation-patterns-starter.yaml`](claude/mitigation-patterns-starter.yaml).
 
 ## Standards referenced

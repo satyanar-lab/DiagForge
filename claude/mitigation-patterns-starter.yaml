@@ -151,3 +151,153 @@ patterns:
       - "MISRA C:2025 Rule 18.1 (pointer arithmetic on arrays)"
       - "ISO 26262-6:2018 9.4.3 (defensive programming)"
       - "CWE-119 (improper restriction of operations within memory bounds)"
+
+  - pattern_id: "communication_retry_state_machine"
+    name: "Communication retry with timeout backoff"
+    short_description: >
+      Wait through a bounded number of missed publications before declaring a
+      lost-communication DTC; clear only after a holdoff of clean reception.
+      Eliminates U-codes caused by single-frame bus glitches.
+    when_applies:
+      - "DTC indicates lost communication with a specific source ECU (U0100, U0121, U0140 family)"
+      - "Frames from the source ID disappear briefly (one to a few publish periods) and recover on their own"
+      - "DTC count climbs without an underlying wiring or ECU power problem"
+    parameters:
+      - name: timeout_ms
+        suggestion_rule: "3x the expected publish period of the source, capped at the system safety reaction budget"
+        type: integer
+      - name: max_consecutive_misses
+        suggestion_rule: "Default 3; raise to 5 on noisy gateways, never below 2"
+        type: integer
+      - name: clear_holdoff_ms
+        suggestion_rule: "5x expected publish period; minimum 200ms to prevent set/clear chatter"
+        type: integer
+    verification:
+      - "Inject a single missing publication; verify no DTC fires and counter resets on recovery."
+      - "Inject misses for timeout_ms + 1 publish periods; verify DTC sets exactly once."
+      - "After DTC sets, restore publications; verify DTC clears only after clear_holdoff_ms of clean reception."
+      - "Stress with bursty miss patterns (e.g. 1-on / 2-off / 1-on); verify no false sets."
+    standards:
+      - "ISO 14229-1:2020 11.3 (DTC qualification)"
+      - "ISO 11898-1:2024 11 (CAN error handling)"
+      - "SAE J1939-73 5.7 (J1939 diagnostic equivalents to U-codes)"
+
+  - pattern_id: "oscillation_hysteresis"
+    name: "Hysteresis-bounded oscillation guard"
+    short_description: >
+      Split a single fault threshold into separate set and clear thresholds
+      with a band wide enough to swallow the observed noise. Stops a DTC
+      from chattering when the signal oscillates near the limit.
+    when_applies:
+      - "Signal crosses a single set/clear threshold many times within a short window"
+      - "DTC sets and clears repeatedly with no underlying state change"
+      - "Pure dematuration_timer is insufficient because the oscillation period exceeds the dematuration time"
+    parameters:
+      - name: hysteresis_band
+        suggestion_rule: "3x the observed peak-to-peak noise amplitude near the threshold"
+        type: float
+      - name: set_threshold
+        suggestion_rule: "Keep the existing fault set point; the rework is on the clear side"
+        type: float
+      - name: clear_threshold
+        suggestion_rule: "set_threshold - hysteresis_band (or + for clear-above-set semantics)"
+        type: float
+    verification:
+      - "Sweep a slow ramp through both thresholds; verify exactly one set and one clear."
+      - "Center bounded noise on the set threshold; verify zero set/clear cycles."
+      - "Push signal across set then immediately back to just below set; verify DTC stays set."
+      - "Push signal across clear; verify DTC clears."
+    standards:
+      - "ISO 14229-1:2020 11.3 (status bit transitions)"
+      - "ISO 26262-6:2018 9 (defensive measures against transient faults)"
+
+  - pattern_id: "signal_freshness_check"
+    name: "Signal freshness / timeout check"
+    short_description: >
+      Track time-since-last-update for every received signal. Refuse stale
+      values and declare unavailable if no update arrives within a bounded
+      window. Critical for safety logic that reads cross-ECU signals.
+    when_applies:
+      - "DTC fires on stale or stuck signal value"
+      - "Signal periodicity is known but the receiver uses last value without an age check"
+      - "Cross-ECU received signal feeds safety logic without freshness gating"
+    parameters:
+      - name: max_age_ms
+        suggestion_rule: "3x the expected publish period, capped at the safety reaction time budget"
+        type: integer
+      - name: stale_action
+        suggestion_rule: "Use safe default + log; never feed a stale safety-critical value into actuation"
+        type: string
+      - name: freshness_counter_size
+        suggestion_rule: "Wide enough to count max_age_ms / cycle_period without rolling over; usually 16-bit"
+        type: integer
+    verification:
+      - "Stop publication from the source; verify subscriber flags stale after max_age_ms."
+      - "Resume publication; verify staleness flag clears within one publish period."
+      - "Confirm safety logic falls back to safe default while the signal is stale."
+      - "Run with cycle period at maximum jitter; verify no false-stale events."
+    standards:
+      - "ISO 14229-1:2020 11.3 (DTC qualification)"
+      - "ISO 26262-6:2018 7.4.13 (data freshness)"
+      - "SAE J1939-21 5.4 (PGN broadcast timing requirements)"
+
+  - pattern_id: "gradient_limit_check"
+    name: "Gradient / rate-of-change limit"
+    short_description: >
+      Reject implausible single-sample jumps. Physical signals (temperature,
+      pressure, vehicle speed) have bounded derivatives; a step beyond that
+      bound usually means a sensor wire fault, ADC glitch, or message
+      corruption, not a real physical change.
+    when_applies:
+      - "DTC indicates an implausible sensor reading"
+      - "Signal physically cannot change as fast as the trace shows (e.g. coolant temp jumps 50C in 100ms)"
+      - "Symptom is a single-sample spike followed by a return to the expected band"
+    parameters:
+      - name: max_gradient_per_s
+        suggestion_rule: "Derived from the signal physics; document the source (e.g. coolant <= 5C/s under load)"
+        type: float
+      - name: violation_action
+        suggestion_rule: "Clamp + count; if violation_count_for_dtc consecutive violations, flag sensor faulty"
+        type: string
+      - name: violation_count_for_dtc
+        suggestion_rule: "Default 3; raise on signals with known burst noise"
+        type: integer
+    verification:
+      - "Inject a step within max_gradient_per_s; verify accepted unchanged."
+      - "Inject a single sample beyond max_gradient_per_s; verify clamped and no DTC."
+      - "Inject violation_count_for_dtc consecutive over-gradient samples; verify DTC sets."
+      - "Inject random ADC noise within physical bounds for 1000s; verify zero false flags."
+    standards:
+      - "ISO 26262-6:2018 9 (defensive programming)"
+      - "ISO 11898-1:2024 11 (frame integrity)"
+
+  - pattern_id: "cross_ecu_consensus"
+    name: "Cross-ECU consensus / voting"
+    short_description: >
+      When the same signal is published by multiple ECUs (vehicle speed from
+      ABS, transmission, gateway), vote across them instead of trusting any
+      single source. Median for analog 3+, majority for boolean, throwout-
+      extreme for 2.
+    when_applies:
+      - "Two or more ECUs publish a redundant version of the same signal"
+      - "DTC fires because one source's reading disagrees with the others"
+      - "Single-source plausibility check insufficient"
+    parameters:
+      - name: voting_strategy
+        suggestion_rule: "median for analog with >=3 sources; majority for boolean; throwout-extreme for exactly 2 sources"
+        type: string
+      - name: disagreement_window_ms
+        suggestion_rule: "2x the maximum publish period across the participating sources"
+        type: integer
+      - name: alert_threshold_count
+        suggestion_rule: "K-out-of-N — typically 2-of-3 disagreements; tune to ASIL of the consumer"
+        type: integer
+    verification:
+      - "All sources agree: verify no DTC and a single consensus value downstream."
+      - "One source disagrees: verify it is excluded and consensus uses the rest."
+      - "All sources disagree: verify DTC fires and a safe default is used."
+      - "One source drops out entirely: verify graceful degradation to the remaining sources."
+    standards:
+      - "ISO 26262-9:2018 6 (dependent failure analysis)"
+      - "ISO 26262-5:2018 9 (hardware safety analysis)"
+      - "ISO 26262-6:2018 8.4.5 (software architectural design for redundancy)"

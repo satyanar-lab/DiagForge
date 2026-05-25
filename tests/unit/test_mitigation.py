@@ -65,16 +65,44 @@ def _features_with_dropouts(durations_ms: list[int]) -> PatternFeatures:
 
 
 class TestLibraryLoading:
-    def test_starter_library_loads_all_five_patterns(self, library: MitigationLibrary) -> None:
+    def test_starter_library_loads_all_patterns(self, library: MitigationLibrary) -> None:
         ids = library.list_pattern_ids()
-        assert len(ids) == 5
+        assert len(ids) == 10
         assert set(ids) == {
             "boundary_condition_guard",
+            "communication_retry_state_machine",
+            "cross_ecu_consensus",
             "dematuration_timer",
             "duration_qualified_debounce",
+            "gradient_limit_check",
+            "oscillation_hysteresis",
             "plausibility_check_redundant_signals",
             "retry_state_machine_nvm",
+            "signal_freshness_check",
         }
+
+    @pytest.mark.parametrize(
+        "pattern_id",
+        [
+            "communication_retry_state_machine",
+            "oscillation_hysteresis",
+            "signal_freshness_check",
+            "gradient_limit_check",
+            "cross_ecu_consensus",
+        ],
+    )
+    def test_new_pattern_has_full_schema(
+        self, library: MitigationLibrary, pattern_id: str
+    ) -> None:
+        p = library.get_by_id(pattern_id)
+        assert p is not None
+        assert p.name
+        assert p.short_description
+        assert len(p.when_applies) >= 2
+        assert len(p.parameters) >= 2
+        assert all(param.suggestion_rule for param in p.parameters)
+        assert len(p.verification) >= 3
+        assert len(p.standards) >= 1
 
     def test_get_by_id_known(self, library: MitigationLibrary) -> None:
         p = library.get_by_id("dematuration_timer")
