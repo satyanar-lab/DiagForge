@@ -118,9 +118,13 @@
     {% if m.parameter_suggestions %}
     <h5>Parameters</h5>
     <table>
-      <tr><th>name</th><th>rationale</th></tr>
+      <tr><th>name</th><th>suggested value</th><th>rationale</th></tr>
       {% for p in m.parameter_suggestions %}
-      <tr><td><code>{{ p.name }}</code></td><td>{{ p.rationale }}</td></tr>
+      <tr>
+        <td><code>{{ p.name }}</code></td>
+        <td>{% if p.suggested_value is not none %}<code>{{ p.suggested_value }}</code>{% else %}<span style="color: var(--muted);">—</span>{% endif %}</td>
+        <td>{{ p.rationale }}</td>
+      </tr>
       {% endfor %}
     </table>
     {% endif %}
@@ -139,15 +143,6 @@
   </div>
   {% endfor %}
   {% endif %}
-
-  <h4>Model</h4>
-  <div class="meta">
-    {{ a.diagnostic_result.model }} ({{ a.diagnostic_result.model_version }})
-    prompt template <code>{{ a.diagnostic_result.prompt_template_version }}</code>
-    {% if a.diagnostic_result.prompt_hash %}
-    prompt hash <code>{{ a.diagnostic_result.prompt_hash[:12] }}…</code>
-    {% endif %}
-  </div>
 </div>
 {% endfor %}
 

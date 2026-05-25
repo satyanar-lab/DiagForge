@@ -67,7 +67,7 @@ def main() -> None:
 @click.option("--verbose", "-v", is_flag=True, help="Enable DEBUG-level logging.")
 @click.option(
     "--model",
-    default="claude-sonnet-4-6",
+    default="claude-opus-4-7",
     show_default=True,
     help="Claude model to use for diagnostic hypotheses.",
 )

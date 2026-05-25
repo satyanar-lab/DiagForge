@@ -50,7 +50,10 @@ select = [
   "C4",  # comprehensions
 ]
 ignore = [
-  "E501",  # line length handled by black
+  "E501",   # line length handled by black
+  "RUF001", # ambiguous unicode in strings — we use × and → intentionally
+  "RUF002", # ambiguous unicode in docstrings — same rationale
+  "RUF003", # ambiguous unicode in comments — same rationale
 ]
 
 [tool.ruff.lint.per-file-ignores]

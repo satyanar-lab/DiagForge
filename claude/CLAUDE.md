@@ -39,7 +39,7 @@ the verification approach suggested.
 - `python-can` for CAN log parsing
 - `cantools` for DBC file parsing
 - `udsoncan` for UDS message decoding (Phase 0 proper, not Phase 0-Lite)
-- `anthropic` SDK (model: `claude-sonnet-4-6`, fallback `claude-opus-4-7`)
+- `anthropic` SDK (model: `claude-opus-4-7`, fallback `claude-sonnet-4-6`)
 - `pytest` + `pytest-cov` + `hypothesis` for tests
 - `jinja2` for HTML report templates
 - `streamlit` for the Phase 1 UI (NOT in Phase 0)

@@ -12,6 +12,7 @@ from diagforge.report.models import (
     DiagnosticResult,
     Hypothesis,
     PatternFeatures,
+    TransitionAnomaly,
 )
 
 
@@ -41,6 +42,23 @@ def _result(*pattern_ids: str | None) -> DiagnosticResult:
 
 def _features() -> PatternFeatures:
     return PatternFeatures(window_us=500_000, notable_findings=["evidence-line"])
+
+
+def _dropout_anomaly(signal: str, duration_ms: int) -> TransitionAnomaly:
+    return TransitionAnomaly(
+        signal_name=signal,
+        anomaly_type="signal_dropout",
+        description=f"{signal} dropped to 50 (baseline median 802, MAD 5.1) for {duration_ms}ms",
+        evidence_us=[],
+    )
+
+
+def _features_with_dropouts(durations_ms: list[int]) -> PatternFeatures:
+    return PatternFeatures(
+        window_us=500_000,
+        transition_anomalies=[_dropout_anomaly("engine_rpm", d) for d in durations_ms],
+        notable_findings=[f"engine_rpm dropped {len(durations_ms)} time(s)"],
+    )
 
 
 # ---------- library ----------
@@ -153,3 +171,101 @@ class TestRecommender:
             prompt_template_version="diag-v1",
         )
         assert rec.match(empty, _features()) == []
+
+
+# ---------- computed parameter suggestions ----------
+
+
+def _param(match: object, name: str) -> object:
+    """Pull a named parameter suggestion off a MitigationMatch (test helper)."""
+    assert hasattr(match, "parameter_suggestions")
+    for p in match.parameter_suggestions:  # type: ignore[attr-defined]
+        if p.name == name:
+            return p
+    raise AssertionError(f"no parameter named {name!r}")
+
+
+class TestDebounceComputedValues:
+    def test_qualification_time_from_dropouts_p0300_shape(self, library: MitigationLibrary) -> None:
+        # The P0300 demo produces 30/30/30/29 ms dropouts; max=30 → 60ms (already on 5ms boundary).
+        rec = MitigationRecommender(library)
+        feats = _features_with_dropouts([30, 30, 30, 29])
+        matches = rec.match(_result("duration_qualified_debounce"), feats)
+        qt = _param(matches[0], "qualification_time_ms")
+        assert qt.suggested_value == 60  # type: ignore[attr-defined]
+        assert "max(30, 30, 30, 29)" in qt.rationale  # type: ignore[attr-defined]
+        assert "× 2 = 60ms" in qt.rationale  # type: ignore[attr-defined]
+
+    def test_rounding_up_to_next_5ms_boundary(self, library: MitigationLibrary) -> None:
+        # max 22ms × 2 = 44ms → rounds up to 45ms.
+        rec = MitigationRecommender(library)
+        feats = _features_with_dropouts([18, 22, 19])
+        matches = rec.match(_result("duration_qualified_debounce"), feats)
+        qt = _param(matches[0], "qualification_time_ms")
+        assert qt.suggested_value == 45  # type: ignore[attr-defined]
+        assert "44ms" in qt.rationale  # type: ignore[attr-defined]
+        assert "→ 45ms" in qt.rationale  # type: ignore[attr-defined]
+
+    def test_exact_multiple_of_5_unchanged(self, library: MitigationLibrary) -> None:
+        # max 5ms × 2 = 10ms, already a 5ms multiple.
+        rec = MitigationRecommender(library)
+        feats = _features_with_dropouts([5, 5])
+        matches = rec.match(_result("duration_qualified_debounce"), feats)
+        qt = _param(matches[0], "qualification_time_ms")
+        assert qt.suggested_value == 10  # type: ignore[attr-defined]
+
+    def test_confirmation_count_defaults_to_1(self, library: MitigationLibrary) -> None:
+        rec = MitigationRecommender(library)
+        feats = _features_with_dropouts([30])
+        matches = rec.match(_result("duration_qualified_debounce"), feats)
+        cc = _param(matches[0], "confirmation_count")
+        assert cc.suggested_value == 1  # type: ignore[attr-defined]
+
+    def test_no_dropouts_leaves_qualification_time_unset(self, library: MitigationLibrary) -> None:
+        rec = MitigationRecommender(library)
+        feats = PatternFeatures(window_us=500_000, notable_findings=["nothing observed"])
+        matches = rec.match(_result("duration_qualified_debounce"), feats)
+        qt = _param(matches[0], "qualification_time_ms")
+        assert qt.suggested_value is None  # type: ignore[attr-defined]
+        # The YAML rule text is still preserved as the rationale.
+        assert "bounce interval" in qt.rationale  # type: ignore[attr-defined]
+
+
+class TestPlausibilityComputedValues:
+    def test_tolerance_window_from_max_dropout_duration(self, library: MitigationLibrary) -> None:
+        rec = MitigationRecommender(library)
+        feats = _features_with_dropouts([30, 35, 28])  # max = 35
+        matches = rec.match(_result("plausibility_check_redundant_signals"), feats)
+        tw = _param(matches[0], "tolerance_window_ms")
+        assert tw.suggested_value == 55  # 35 + 20  # type: ignore[attr-defined]
+        assert "35ms + 20ms buffer = 55ms" in tw.rationale  # type: ignore[attr-defined]
+
+    def test_disagreement_threshold_remains_unset(self, library: MitigationLibrary) -> None:
+        rec = MitigationRecommender(library)
+        feats = _features_with_dropouts([30])
+        matches = rec.match(_result("plausibility_check_redundant_signals"), feats)
+        dt = _param(matches[0], "disagreement_threshold")
+        assert dt.suggested_value is None  # type: ignore[attr-defined]
+
+    def test_no_dropouts_leaves_tolerance_window_unset(self, library: MitigationLibrary) -> None:
+        rec = MitigationRecommender(library)
+        feats = PatternFeatures(window_us=500_000, notable_findings=["nothing observed"])
+        matches = rec.match(_result("plausibility_check_redundant_signals"), feats)
+        tw = _param(matches[0], "tolerance_window_ms")
+        assert tw.suggested_value is None  # type: ignore[attr-defined]
+
+
+class TestDeferredPatternsRemainNull:
+    """Patterns Phase 0-Lite cannot yet parameterize must still emit None values."""
+
+    @pytest.mark.parametrize(
+        "pattern_id",
+        ["dematuration_timer", "retry_state_machine_nvm", "boundary_condition_guard"],
+    )
+    def test_all_parameters_unset(self, library: MitigationLibrary, pattern_id: str) -> None:
+        rec = MitigationRecommender(library)
+        feats = _features_with_dropouts([30, 30, 30, 29])
+        matches = rec.match(_result(pattern_id), feats)
+        assert all(p.suggested_value is None for p in matches[0].parameter_suggestions)
+        # rationale strings remain populated from the YAML
+        assert all(p.rationale for p in matches[0].parameter_suggestions)

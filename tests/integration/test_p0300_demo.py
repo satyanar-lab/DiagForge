@@ -16,6 +16,7 @@ import pytest
 from click.testing import CliRunner
 
 from diagforge import cli as cli_module
+from diagforge.diagnostic.agent import ToolCallResult
 from diagforge.report.models import Report
 
 pytestmark = pytest.mark.integration
@@ -37,7 +38,7 @@ class _FakeAnthropicClient:
         model: str,
         max_tokens: int,
         tool: dict[str, Any],
-    ) -> dict[str, Any]:
+    ) -> ToolCallResult:
         self.calls.append({"system": system, "user": user, "model": model, "tool": tool["name"]})
         # Extract the verbatim finding from the prompt so the citation always matches.
         marker = '"engine_rpm dropped 4 time(s)'
@@ -46,17 +47,17 @@ class _FakeAnthropicClient:
             finding = finding.strip('"')
         else:
             finding = "engine_rpm dropped 4 time(s)"
-        return {
+        tool_input = {
             "hypotheses": [
                 {
                     "rank": 1,
                     "description": "Insufficient misfire dematuration timer",
                     "confidence": "high",
                     "evidence": [finding],
-                    "suggested_pattern_id": "dematuration_timer",
+                    "suggested_pattern_id": "duration_qualified_debounce",
                     "reasoning": (
                         "Short, repeated RPM sags pass a single-shot misfire "
-                        "threshold; a dematuration timer would suppress them."
+                        "threshold; the qualification window is too small."
                     ),
                 },
                 {
@@ -69,6 +70,8 @@ class _FakeAnthropicClient:
                 },
             ]
         }
+        # Mirror what the real client does: surface a resolved model alias.
+        return ToolCallResult(input=tool_input, resolved_model=f"{model}-mocked")
 
 
 @pytest.fixture
@@ -121,21 +124,30 @@ def test_cli_analyze_produces_report(
 
     hyps = analysis.diagnostic_result.hypotheses
     assert hyps[0].rank == 1
-    assert hyps[0].suggested_pattern_id == "dematuration_timer"
+    assert hyps[0].suggested_pattern_id == "duration_qualified_debounce"
     # evidence must cite verbatim from notable_findings
     assert all(any(ev in findings for ev in h.evidence) for h in hyps)
 
     matches = analysis.mitigation_matches
     assert len(matches) == 1
-    assert matches[0].pattern_id == "dematuration_timer"
+    assert matches[0].pattern_id == "duration_qualified_debounce"
     assert matches[0].verification_steps  # non-empty
     assert matches[0].standards_references
+    # End-to-end check: the computed qualification_time_ms is in the report
+    # bundle, derived from the P0300 dropouts the analyzer measured.
+    qt = next(p for p in matches[0].parameter_suggestions if p.name == "qualification_time_ms")
+    assert isinstance(qt.suggested_value, int | float)
+    assert qt.suggested_value > 0
 
     # HTML smoke-checks
     html = report_html.read_text()
     assert "P0300" in html
-    assert "dematuration_timer" in html
+    assert "duration_qualified_debounce" in html
     assert "dropped 4 time" in html
+    # The provenance footer (model/version/prompt hash) is intentionally
+    # absent from the HTML — those values stay in report.json for audit.
+    assert "prompt template" not in html
+    assert "prompt hash" not in html
 
     # the mock was called exactly once (no retry, evidence matched first try)
     assert len(fake_client_factory.calls) == 1

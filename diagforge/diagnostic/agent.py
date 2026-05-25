@@ -15,6 +15,7 @@ is explicitly forbidden in CLAUDE.md.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Any, Final, Protocol
 
 from pydantic import ValidationError
@@ -31,9 +32,24 @@ from diagforge.report.models import DiagnosticResult, Hypothesis, PatternFeature
 
 _log = get_logger(__name__)
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
-FALLBACK_MODEL = "claude-opus-4-7"
+DEFAULT_MODEL = "claude-opus-4-7"
+FALLBACK_MODEL = "claude-sonnet-4-6"
 MAX_RESPONSE_TOKENS = 2048
+
+
+@dataclass(frozen=True)
+class ToolCallResult:
+    """What the diagnostic client returns from a forced tool_use call.
+
+    `input` is the validated dict the model passed to the tool.
+    `resolved_model` is the model identifier the API actually used to serve
+    the request (e.g. a pinned date-suffixed alias) — falls back to the
+    requested model name if the SDK doesn't surface a resolved one.
+    """
+
+    input: dict[str, Any]
+    resolved_model: str
+
 
 #: Tool name the model is forced to call. Stable identifier — bump if the
 #: input_schema changes in a way that would shift model behavior.
@@ -103,8 +119,9 @@ class AnthropicClient(Protocol):
     """Minimal seam between DiagForge and the Anthropic SDK.
 
     A concrete implementation forces a single tool call via `tool_choice` and
-    returns the tool input dict. The test fake returns canned dicts without
-    any network traffic.
+    returns a `ToolCallResult` carrying the tool input dict and the resolved
+    model identifier. The test fake returns canned values without any
+    network traffic.
     """
 
     def call_with_tool(
@@ -115,7 +132,7 @@ class AnthropicClient(Protocol):
         model: str,
         max_tokens: int,
         tool: dict[str, Any],
-    ) -> dict[str, Any]:  # pragma: no cover - protocol
+    ) -> ToolCallResult:  # pragma: no cover - protocol
         ...
 
 
@@ -135,7 +152,7 @@ class RealAnthropicClient:
         model: str,
         max_tokens: int,
         tool: dict[str, Any],
-    ) -> dict[str, Any]:
+    ) -> ToolCallResult:
         # The SDK's `tools` / `tool_choice` parameters are typed as a sealed
         # union of TypedDicts whose shape matches what we build dynamically.
         # mypy can't bridge the dict[str, Any] → TypedDict gap, so suppress
@@ -149,6 +166,10 @@ class RealAnthropicClient:
             tool_choice={"type": "tool", "name": tool["name"]},
             temperature=0.0,
         )
+        # The API returns the actual resolved model in `resp.model` (e.g. a
+        # date-pinned alias). Fall back to the requested model if the SDK
+        # doesn't surface one.
+        resolved = str(getattr(resp, "model", "") or model)
         for block in resp.content:
             if (
                 getattr(block, "type", None) == "tool_use"
@@ -159,7 +180,7 @@ class RealAnthropicClient:
                     raise ValueError(
                         f"tool_use block had non-dict input: {type(tool_input).__name__}"
                     )
-                return dict(tool_input)
+                return ToolCallResult(input=dict(tool_input), resolved_model=resolved)
         observed = [getattr(b, "type", "?") for b in resp.content]
         raise ValueError(
             f"model did not call tool {tool['name']!r}; got content block types {observed}"
@@ -177,12 +198,10 @@ class DiagnosticAgent:
         self,
         client: AnthropicClient,
         model: str = DEFAULT_MODEL,
-        model_version: str = "unknown",
         max_response_tokens: int = MAX_RESPONSE_TOKENS,
     ) -> None:
         self._client = client
         self.model = model
-        self.model_version = model_version
         self.max_response_tokens = max_response_tokens
 
     def propose(
@@ -213,7 +232,7 @@ class DiagnosticAgent:
 
     def _one_shot(self, features: PatternFeatures, user_prompt: str) -> DiagnosticResult:
         try:
-            raw = self._client.call_with_tool(
+            result = self._client.call_with_tool(
                 system=SYSTEM_PROMPT,
                 user=user_prompt,
                 model=self.model,
@@ -224,16 +243,17 @@ class DiagnosticAgent:
             # Client refused the tool call or returned an unusable shape.
             _log.error("client refused tool call: %s", exc)
             raise DiagnosticParseError(f"non-JSON response: {exc}") from exc
-        return self._parse(raw, features, user_prompt)
+        return self._parse(result, features, user_prompt)
 
     def _parse(
         self,
-        raw: dict[str, Any],
+        result: ToolCallResult,
         features: PatternFeatures,
         user_prompt: str,
     ) -> DiagnosticResult:
         # features is reserved for hypothesis-level cross-checks in Phase 0.
         _ = features
+        raw = result.input
         if not isinstance(raw, dict) or "hypotheses" not in raw:
             _log.error("tool input missing 'hypotheses': %s", _truncate(json.dumps(raw)))
             raise DiagnosticParseError("response missing top-level 'hypotheses' array")
@@ -255,7 +275,7 @@ class DiagnosticAgent:
         return DiagnosticResult(
             hypotheses=hypotheses,
             model=self.model,
-            model_version=self.model_version,
+            model_version=result.resolved_model,
             prompt_template_version=PROMPT_TEMPLATE_VERSION,
             prompt_hash=prompt_hash(SYSTEM_PROMPT, user_prompt),
         )
