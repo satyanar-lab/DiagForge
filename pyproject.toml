@@ -107,6 +107,9 @@ branch = true
 source = ["diagforge"]
 omit = [
   "diagforge/__init__.py",
+  # Streamlit script-mode entry point — only loadable via `streamlit run`.
+  # All testable UI logic lives in diagforge/ui/pipeline.py.
+  "diagforge/ui/app.py",
 ]
 
 [tool.coverage.report]

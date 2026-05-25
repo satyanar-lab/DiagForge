@@ -107,10 +107,19 @@ poetry run diagforge analyze \
 open demo-output/report.html   # macOS;  xdg-open on Linux
 ```
 
-Or use the bundled `make demo` target:
+Or use the bundled `make demo` target (P0300 example):
 
 ```bash
-make demo                       # runs the P0300 example end-to-end
+make demo                       # P0300 intermittent misfire
+make demo-u0100                 # U0100 lost communication
+make demo-p0420                 # P0420 catalyst threshold
+make demo-all                   # all three back-to-back
+```
+
+Or use the web UI — drag-and-drop a trace, DTC snapshot, and optional DBC:
+
+```bash
+make ui                         # launches Streamlit on localhost:8501
 ```
 
 ### Demo output
