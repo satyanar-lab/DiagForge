@@ -18,6 +18,8 @@ from typing import Final
 
 from diagforge import __version__
 from diagforge._logging import get_logger
+from diagforge.ingestion.models import TraceEvent
+from diagforge.report.charts import render_signal_chart
 from diagforge.report.html import render_report_html
 from diagforge.report.models import (
     SCHEMA_VERSION,
@@ -71,6 +73,7 @@ class ReportEmitter:
         self._out_dir = out_dir
         self._input = input_info
         self._analyses: list[DtcAnalysis] = []
+        self._event_slices: list[list[TraceEvent]] = []
         self._report_id = _uuid7()
         self._created_at = dt.datetime.now(tz=dt.UTC)
 
@@ -78,8 +81,14 @@ class ReportEmitter:
     def report_id(self) -> str:
         return self._report_id
 
-    def add_analysis(self, analysis: DtcAnalysis) -> None:
+    def add_analysis(
+        self,
+        analysis: DtcAnalysis,
+        events_slice: list[TraceEvent] | None = None,
+    ) -> None:
+        """Append a DTC analysis. The optional events_slice feeds the inline chart."""
         self._analyses.append(analysis)
+        self._event_slices.append(events_slice or [])
 
     def finalize(self) -> Path:
         """Render the report to disk; return the path to `report.json`."""
@@ -99,8 +108,12 @@ class ReportEmitter:
             encoding="utf-8",
         )
 
+        charts: list[str] = [
+            render_signal_chart(slice_, analysis) if slice_ else ""
+            for analysis, slice_ in zip(self._analyses, self._event_slices, strict=True)
+        ]
         html_path = self._out_dir / _REPORT_HTML
-        html_path.write_text(render_report_html(report), encoding="utf-8")
+        html_path.write_text(render_report_html(report, charts=charts), encoding="utf-8")
 
         manifest = {
             "report_id": self._report_id,

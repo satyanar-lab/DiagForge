@@ -335,13 +335,22 @@ def detect_communication_gaps(
     return anomalies
 
 
-def _slice_to_window(
+def slice_events_for_dtc(
     events: Sequence[TraceEvent], dtc: DTCSnapshot, window_us: int
 ) -> list[TraceEvent]:
-    """Return events whose timestamps fall within `window_us` before or after the DTC range."""
+    """Return events whose timestamps fall within `window_us` before or after the DTC range.
+
+    Public counterpart of the internal window helper — Layer 5 charting uses
+    the same slice so the timing diagram and the analyzer's findings reference
+    the same point set.
+    """
     lo = max(0, dtc.timestamp_first_us - window_us)
     hi = dtc.timestamp_latest_us + window_us
     return [ev for ev in events if lo <= ev.timestamp_us <= hi]
+
+
+# Backwards-compatible alias used internally by build_pattern_features.
+_slice_to_window = slice_events_for_dtc
 
 
 def _discover_signals(events: Sequence[TraceEvent]) -> list[str]:

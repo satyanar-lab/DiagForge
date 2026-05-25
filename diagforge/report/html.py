@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from importlib import resources
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -21,6 +22,15 @@ def _env() -> Environment:
     )
 
 
-def render_report_html(report: Report) -> str:
+def render_report_html(report: Report, charts: Sequence[str] | None = None) -> str:
+    """Render the report HTML, optionally with one inline SVG chart per analysis.
+
+    `charts` is a list aligned with `report.analyses`. An empty string at any
+    index means "no chart for this DTC"; the template omits the figure block.
+    """
     template = _env().get_template(_TEMPLATE_NAME)
-    return template.render(report=report)
+    if charts is None:
+        charts = [""] * len(report.analyses)
+    if len(charts) != len(report.analyses):
+        raise ValueError(f"charts length {len(charts)} != analyses length {len(report.analyses)}")
+    return template.render(report=report, charts=list(charts))

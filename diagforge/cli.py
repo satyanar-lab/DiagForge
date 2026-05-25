@@ -11,7 +11,7 @@ import click
 
 from diagforge import __version__
 from diagforge._logging import configure_logging, get_logger
-from diagforge.analyzer.timing import build_pattern_features
+from diagforge.analyzer.timing import build_pattern_features, slice_events_for_dtc
 from diagforge.diagnostic.agent import DiagnosticAgent, RealAnthropicClient
 from diagforge.ingestion.dtc_json import DtcJsonParser
 from diagforge.ingestion.registry import format_for, parser_for, supported_extensions
@@ -145,6 +145,7 @@ def analyze(
     window_us = max(50_000, window_ms * 1_000)
     for dtc in dtcs:
         _log.info("analyzing DTC %s (window %dms)", dtc.dtc_code, window_us // 1000)
+        slice_ = slice_events_for_dtc(events, dtc, window_us)
         features = build_pattern_features(events, dtc, window_us=window_us)
         result = agent.propose(dtc, features, pattern_ids)
         matches = recommender.match(result, features)
@@ -162,7 +163,8 @@ def analyze(
                 pattern_features=features,
                 diagnostic_result=result,
                 mitigation_matches=matches,
-            )
+            ),
+            events_slice=slice_,
         )
 
     report_json = emitter.finalize()
