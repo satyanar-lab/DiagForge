@@ -81,17 +81,34 @@ Detailed design: [`ARCHITECTURE.md`](ARCHITECTURE.md)
 ```bash
 git clone https://github.com/<you>/DiagForge
 cd DiagForge
-make install
-export ANTHROPIC_API_KEY=sk-...
+make install                   # poetry install + dep check
+export ANTHROPIC_API_KEY=sk-... # required: read at run time, never committed
 
 # Analyze the P0300 intermittent misfire demo case
-diagforge analyze \
+poetry run diagforge analyze \
   examples/p0300_intermittent_misfire/trace.asc \
   --dtcs examples/p0300_intermittent_misfire/dtcs.json \
-  --output ./report/
+  --dbc  examples/p0300_intermittent_misfire/engine.dbc \
+  --output ./demo-output/
 
-open report/report.html
+open demo-output/report.html
 ```
+
+Or use the bundled `make demo` target:
+
+```bash
+make demo                       # runs the P0300 example end-to-end
+```
+
+## Demo
+
+`make demo` ingests the P0300 trace, runs the deterministic analyzer over a
+500 ms window around the DTC, asks Claude to rank root-cause hypotheses
+strictly citing the analyzer findings, and emits a self-contained HTML +
+JSON report bundle. Typical run time is under 10 seconds.
+
+A screenshot of the rendered HTML report belongs here — capture
+`demo-output/report.html` after running `make demo`.
 
 ## Mitigation pattern library
 
