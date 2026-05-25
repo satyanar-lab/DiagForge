@@ -1,0 +1,12 @@
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: ECM
+
+BO_ 1025 PostCatO2: 8 ECM
+ SG_ o2_voltage_b1s2 : 0|16@1+ (0.001,0) [0|5.0] "V" Vector__XXX
+
+CM_ BO_ 1025 "Post-catalyst O2 sensor voltage, Bank 1 Sensor 2 (50 Hz)";

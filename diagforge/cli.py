@@ -71,6 +71,16 @@ def main() -> None:
     show_default=True,
     help="Claude model to use for diagnostic hypotheses.",
 )
+@click.option(
+    "--window-ms",
+    type=int,
+    default=500,
+    show_default=True,
+    help=(
+        "Analysis window (milliseconds) around each DTC's first/last occurrence. "
+        "Increase for slow-oscillating signals (catalyst monitors, ~1-3s)."
+    ),
+)
 def analyze(
     trace_path: Path,
     dtcs_path: Path,
@@ -78,6 +88,7 @@ def analyze(
     dbc_path: Path | None,
     verbose: bool,
     model: str,
+    window_ms: int,
 ) -> None:
     """Analyze a diagnostic trace and emit a DiagForge evidence bundle."""
     configure_logging(verbose=verbose)
@@ -131,9 +142,10 @@ def analyze(
     )
     emitter = ReportEmitter(out_dir, input_info)
 
+    window_us = max(50_000, window_ms * 1_000)
     for dtc in dtcs:
-        _log.info("analyzing DTC %s", dtc.dtc_code)
-        features = build_pattern_features(events, dtc)
+        _log.info("analyzing DTC %s (window %dms)", dtc.dtc_code, window_us // 1000)
+        features = build_pattern_features(events, dtc, window_us=window_us)
         result = agent.propose(dtc, features, pattern_ids)
         matches = recommender.match(result, features)
         emitter.add_analysis(

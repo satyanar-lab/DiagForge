@@ -1,0 +1,12 @@
+{
+  "dtcs": [
+    {
+      "dtc_code": "P0420",
+      "standard": "obd2",
+      "timestamp_first_us": 860000,
+      "timestamp_latest_us": 2380000,
+      "occurrence_count": 3,
+      "description": "Catalyst System Efficiency Below Threshold (Bank 1)"
+    }
+  ]
+}

@@ -230,7 +230,7 @@ def detect_value_anomalies(
                 anomaly_type=anomaly_type,
                 description=(
                     f"{signal_name} {verb} "
-                    f"{extreme:.0f} (baseline median {median:.0f}, MAD {mad:.1f}) for "
+                    f"{extreme:.3g} (baseline median {median:.3g}, MAD {mad:.2g}) for "
                     f"{duration_us / 1000:.0f}ms; cluster window {window_us // 1000}ms"
                 ),
                 evidence_us=[ts for ts, _ in run],
@@ -425,7 +425,7 @@ def _build_notable_findings(
             findings.append(
                 f"{signal} dropped {len(dropouts)} time(s) within "
                 f"{window_us // 1000}ms of the DTC window — "
-                f"extreme values {sorted({round(d) for d in depths if d is not None})}, "
+                f"extreme values {_format_unique_values(depths)}, "
                 f"durations (ms) {durations_ms}"
             )
         if spikes:
@@ -434,7 +434,7 @@ def _build_notable_findings(
             findings.append(
                 f"{signal} spiked {len(spikes)} time(s) within "
                 f"{window_us // 1000}ms of the DTC window — "
-                f"peak values {sorted({round(p) for p in peaks if p is not None})}, "
+                f"peak values {_format_unique_values(peaks)}, "
                 f"durations (ms) {durations_ms}"
             )
 
@@ -473,6 +473,26 @@ def _build_notable_findings(
             f"within ±{window_us // 1000}ms — DTC may reflect a steady-state condition."
         )
     return findings
+
+
+def _format_unique_values(values: Sequence[float | None]) -> str:
+    """Render a sorted, de-duplicated list of values with up to 3 sig figs each.
+
+    Floats below 10 get fractional precision; ints stay int. Keeps small-unit
+    signals (volts, amps) readable while big-unit signals (RPM, temp_C)
+    don't get spurious trailing zeros.
+    """
+    cleaned: list[float] = []
+    seen: set[str] = set()
+    for v in values:
+        if v is None:
+            continue
+        key = f"{v:.3g}"
+        if key not in seen:
+            seen.add(key)
+            cleaned.append(v)
+    cleaned.sort()
+    return "[" + ", ".join(f"{v:.3g}" for v in cleaned) + "]"
 
 
 def _estimate_duration_ms(anomaly: TransitionAnomaly) -> int:
