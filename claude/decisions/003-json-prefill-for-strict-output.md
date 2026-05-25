@@ -1,6 +1,8 @@
 # ADR 003 — JSON pre-fill for strict structured output
 
-**Status:** accepted (T0L.5)
+**Status:** **Superseded by ADR-007** (Claude 4-series models reject
+assistant-message pre-fill). Originally accepted at T0L.5; replaced by
+tool_use + forced `tool_choice` in the post-T0L.8 fix bundle.
 **Date:** 2026-05-24
 
 The Anthropic SDK does not currently expose a dedicated `response_format`

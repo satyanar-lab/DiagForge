@@ -1,8 +1,12 @@
-# DiagForge Phase 0-Lite — Session Summary
+# DiagForge v0.1.0 — Session Summary
 
 A single autonomous Claude Code session built all of Phase 0-Lite end-to-end
-(tickets T0L.1 through T0L.8). This document is for the human to read before
-defending the work in interviews.
+(tickets T0L.1 through T0L.8). A short series of post-autopilot fix commits
+then unblocked the live `make demo`, switched the diagnostic agent from
+JSON-prefill to Anthropic `tool_use`, promoted `claude-opus-4-7` to the
+default model, and added concrete parameter-value computation for two of
+the five starter mitigation patterns. This document is for the human to
+read before defending the work in interviews.
 
 ## Tickets completed
 
@@ -13,12 +17,17 @@ defending the work in interviews.
 | T0L.2 | `4ee43bc` | Pydantic models for ingestion events and the canonical report schema |
 | T0L.3 | `b8fa34d` | ASC trace parser, DTC JSON parser, abstract base, fixtures |
 | T0L.4 | `1a315b5` | Deterministic timing + value anomaly analyzer (median+MAD baseline) |
-| T0L.5 | `18d56d1` | Diagnostic agent with JSON-prefill, evidence validation, single retry |
+| T0L.5 | `18d56d1` | Diagnostic agent with JSON-prefill, evidence validation, single retry (superseded — see ADR-007) |
 | T0L.6 | `1967986` | Mitigation pattern library loader + strict-id recommender |
 | T0L.7a | `2499247` | Report emitter, sha256 manifest, Jinja2 HTML template |
 | T0L.7b | `e70601b` | CLI analyze command wired through all five layers |
 | T0L.7c+d | `9779109` | P0300 demo case + integration test, UUIDv7 generator fix |
 | T0L.8 | `6575706` | Polish, ADRs, README quick-start update, AI-attribution sweep |
+| docs | `6deae89` | Backfill T0L.8 commit hash in session summary |
+| fix | `685b0e7` | Upgrade anthropic SDK to resolve httpx proxies kwarg incompatibility |
+| fix | `337abe7` | Use tool_use for structured output instead of assistant prefill (supersedes T0L.5 prefill approach) |
+| feat | `c03cc20` | Compute concrete mitigation parameters, switch to opus-4-7, simplify HTML report |
+| fix | `9d03b21` | Drop deprecated `temperature` param for claude-opus-4-7 compatibility |
 
 All commits are conventional-style, ticket-referenced, no AI attribution
 anywhere (verified via `grep`).
@@ -36,14 +45,19 @@ heuristic), and a power-rail collapse-cluster detector — all funneled into
 a `PatternFeatures` with short, number-bearing `notable_findings`. The
 **diagnostic agent** wraps Anthropic's SDK behind a `Protocol`-shaped seam
 (`AnthropicClient`) so the integration test can substitute a deterministic
-fake; the real client uses assistant-side JSON pre-fill to force strict JSON
-output and validates every response against pydantic. **The mitigation
-recommender** strictly matches `hypothesis.suggested_pattern_id` against the
-packaged YAML library (5 starter patterns) and emits per-parameter
-suggestion rationales + verification steps + standards citations. The
-**report emitter** assembles per-DTC analyses into a UUIDv7-keyed bundle
-(`report.json`, `report.html` via Jinja2, `manifest.json` with sha256s)
-ready for hand-off to whatever review tool the user has.
+fake; the real client declares a single tool (`submit_diagnostic_result`)
+and forces the model to call it via `tool_choice`, so structured output is
+constrained at the API layer rather than parsed back out of free text. No
+`temperature` kwarg is passed (Claude 4.x rejects it; forced tool_use is
+already deterministic enough). **The mitigation recommender** strictly
+matches `hypothesis.suggested_pattern_id` against the packaged YAML library
+(5 starter patterns), emits concrete numeric parameter suggestions for two
+patterns (`duration_qualified_debounce`, `plausibility_check_redundant_signals`)
+computed from the analyzer's evidence, and falls back to YAML rationale
+text for the other three. The **report emitter** assembles per-DTC analyses
+into a UUIDv7-keyed bundle (`report.json`, `report.html` via Jinja2,
+`manifest.json` with sha256s) ready for hand-off to whatever review tool
+the user has.
 
 ## Key design decisions made autonomously
 
@@ -61,11 +75,10 @@ numbers reference files in `claude/decisions/`.
   full pattern list in its prompt, so the burden lies upstream where
   context is fullest. Unknown IDs are logged-and-dropped rather than
   raising — one bad hypothesis cannot kill the report.
-* **ADR-003 — Assistant-side JSON pre-fill** for strict structured output.
-  Anthropic doesn't expose a `response_format` toggle; pre-filling the
-  assistant message with `{` forces the model into JSON immediately.
-  Defensive strip of trailing markdown fences. On parse failure: log a
-  500-char truncation and raise `DiagnosticParseError`.
+* **ADR-003 — Assistant-side JSON pre-fill for strict structured output**
+  (**superseded by ADR-007**). Originally used `[user, assistant: "{"]` to
+  force JSON-only output; Claude 4-series models reject assistant-message
+  prefill, so the approach was replaced.
 * **ADR-004 — Auto-decoder fallback** when `--dbc` is omitted. Emits
   `frame_0x<id_hex>` synthetic signals from the first two LE bytes. Lets
   reviewers run DiagForge against an arbitrary ASC without authoring a
@@ -81,6 +94,16 @@ numbers reference files in `claude/decisions/`.
   that fail to import their own deps. The Makefile defensively clears
   these so CI-style reproducibility doesn't depend on the developer's
   shell config.
+* **ADR-007 — Tool_use with forced tool_choice for structured output.**
+  Supersedes ADR-003. The agent declares a `submit_diagnostic_result`
+  tool whose `input_schema` mirrors the hypotheses sub-schema, and
+  `tool_choice={"type":"tool","name":"submit_diagnostic_result"}` forces
+  the model to call it. The user message is now the last turn (no
+  assistant pre-fill). The wrapper returns a `ToolCallResult(input,
+  resolved_model)` dataclass so `DiagnosticResult.model_version` records
+  the API's resolved alias (e.g. `claude-opus-4-7-20260118`) rather than
+  the literal string `"unknown"`. No `temperature` kwarg — Claude 4.x
+  rejects it, and forced tool_use already provides deterministic output.
 
 Other smaller calls I made and the reasoning, none of which got their
 own ADR but all of which were judgment calls:
@@ -92,7 +115,9 @@ own ADR but all of which were judgment calls:
   default. The `[[tool.mypy.overrides]]` block silences `python-can` and
   `cantools` which lack type stubs; everything else is strict.
 * **Ruff replaces flake8 + isort + pyupgrade + bugbear.** Single tool,
-  faster, consistent config in `pyproject.toml`.
+  faster, consistent config in `pyproject.toml`. RUF001/RUF002/RUF003
+  ignored project-wide because automotive copy legitimately uses `×`,
+  `→`, `±`, `µ`, etc., and we don't want to noqa every line that does.
 * **`pytest --cov=diagforge` always on** via `addopts`, so a developer
   running `pytest` directly still gets coverage output and accidentally-
   uncovered code shows up immediately.
@@ -101,8 +126,8 @@ own ADR but all of which were judgment calls:
 * **`ANTHROPIC_API_KEY` checked in the CLI itself**, not just in the SDK
   wrapper. Failing fast at command-parse time gives a clear error message
   rather than a stack trace deep in `httpx`.
-* **`--model` is a CLI flag with `claude-sonnet-4-6` default.** Lets a
-  reviewer try `claude-opus-4-7` (the fallback specified in CLAUDE.md)
+* **`--model` is a CLI flag with `claude-opus-4-7` default.** Lets a
+  reviewer try the `claude-sonnet-4-6` fallback (or any later model)
   without code changes.
 * **Bytes payload kept as `bytes`** through the model boundary (not
   `list[int]` or hex string). Pydantic v2 round-trips `bytes` to JSON as
@@ -117,7 +142,9 @@ own ADR but all of which were judgment calls:
   exact system+user text sent to the model. Reproducibility-debugging:
   given a report you can reconstruct the inputs.
 * **HTML uses inline CSS, no JS, no fonts.** Renders in any browser or
-  email-archive viewer. Bundle-friendly.
+  email-archive viewer. Bundle-friendly. The model/prompt-template/
+  prompt-hash provenance lives only in `report.json` (removed from HTML
+  to keep the human view focused on diagnostic content).
 * **Per-dropout duration extracted by regex-on-description, not by
   threading the number through the pydantic model.** Quick, ugly,
   works for now. A Phase 0 cleanup would add a structured
@@ -131,6 +158,10 @@ own ADR but all of which were judgment calls:
   though Phase 0-Lite ships exactly one YAML. Cheap to add now; lets
   third parties add their own pattern files in Phase 1 without touching
   loader code.
+* **Mitigation parameter dispatch via a small `_DISPATCH` table** keyed
+  on `pattern_id`. Adding the next pattern's value-computer is a single
+  dict entry plus a new `_suggest_<pattern>` function; the recommender
+  fall-through stays clean.
 * **Integration test mocks via `monkeypatch.setattr` on the CLI module's
   `RealAnthropicClient` symbol**, not via a global registry or DI
   container. Lightest-weight way to inject a fake.
@@ -178,55 +209,56 @@ demo-output/
 
 ## Coverage report
 
-Final from `make test` after T0L.8:
+Final from `make test` after the post-autopilot fix bundle:
 
 ```
-82 passed, total coverage 90% (branch + line)
+97 passed, total coverage 90% (branch + line)
 diagforge/_logging.py                       100%
 diagforge/analyzer/timing.py                 79%   ← uncovered: helper edge branches
 diagforge/cli.py                            100%
-diagforge/diagnostic/agent.py                80%   ← uncovered: RealAnthropicClient (live SDK)
+diagforge/diagnostic/agent.py                84%   ← uncovered: RealAnthropicClient (live SDK)
 diagforge/diagnostic/prompts.py             100%
 diagforge/ingestion/base.py                 100%
 diagforge/ingestion/can_asc.py               83%
 diagforge/ingestion/dtc_json.py              96%
 diagforge/ingestion/models.py               100%
-diagforge/ingestion/signal_decode.py        ~88%
+diagforge/ingestion/signal_decode.py         92%
 diagforge/mitigation/library.py              93%
-diagforge/mitigation/recommender.py         100%
+diagforge/mitigation/recommender.py          94%
 diagforge/report/emitter.py                  98%
 diagforge/report/html.py                    100%
 diagforge/report/models.py                   97%
 ```
 
-The two sub-80% files are intentional:
+The two sub-90% source files are intentional:
 
 * **timing.py at 79%** — the uncovered branches are graceful-degeneracy
   guards (empty intervals, all-identical-values, malformed description
   text). Each is one or two lines; raising the coverage further requires
   contrived inputs that wouldn't surface in real diagnostic traces.
-* **agent.py at 80%** — the uncovered code is the `RealAnthropicClient`
+* **agent.py at 84%** — the uncovered code is the `RealAnthropicClient`
   wrapper around `anthropic.messages.create`. Covered only by `make demo`
   with a real API key; unit-testable only by mocking the SDK itself,
   which would just re-test the SDK's internals.
 
 ## Known limitations / TODOs
 
-* **Live `make demo` was not run** during the autonomous session because
-  no `ANTHROPIC_API_KEY` was present in the environment. The mocked
-  integration test (`test_cli_analyze_produces_report`) exercises every
-  line of the CLI pipeline end-to-end, so the wiring is proven correct;
-  what is unproven is the actual prompt-response interaction with Claude.
-  See `claude/BLOCKED.md` for the one-line user action needed.
+* **Computed parameter values cover two of five patterns.**
+  `duration_qualified_debounce.qualification_time_ms` and
+  `plausibility_check_redundant_signals.tolerance_window_ms` are now
+  derived from the analyzer's `signal_dropout` durations and emitted with
+  worked-arithmetic rationale (e.g. `"max(30, 30, 30, 29) ms × 2 = 60ms
+  (rounded up to nearest 5ms → 60ms)"`). The remaining categorical or
+  domain-specific parameters (`bounds_action`, retry strategies, NVM
+  characteristics) still use rationale-only suggestions — adding their
+  value-computers is a Phase 0 task and is wired through the
+  `_DISPATCH` table in `diagforge/mitigation/recommender.py`.
 * **No BLF, UDS, or J1939 ingestion** — Phase 0 tickets T0.1 through T0.3.
 * **No multi-DTC correlation** — Phase 1 ticket T1.1. The current pipeline
   iterates DTCs independently.
 * **No DBC-derived "discrete vs analog" hint** — ADR-005 uses a value-
   count heuristic instead. Some DBCs carry an explicit flag we could
   consume.
-* **`MitigationMatch.parameter_suggestions.suggested_value` is always
-  null** — only the rationale text is populated. Phase 0 ticket adds
-  per-parameter numeric suggestion derived from `features`.
 * **No correlation detection between signals** — `correlations` is an
   empty list in every report. Lays the schema down for Phase 0/1 but
   the analyzer doesn't populate it yet.
@@ -241,12 +273,15 @@ The two sub-80% files are intentional:
   ID. Acceptable for the demo (one signal in 0x100) but lossy on real
   buses. DBC mode is the supported workflow.
 
-## Suggested final commit + tag commands (your call, not mine)
+## Release status
+
+The v0.1.0 codebase is on `main` at GitHub
+(`https://github.com/satyanar-lab/DiagForge`) and `origin/main` is in sync
+with the local branch. The v0.1.0 git tag has **not** been created yet —
+tag once you have personally verified `make demo` against the live API
+and reviewed the HTML report:
 
 ```bash
-git tag v0.1.0          # tag the v0.1.0 release; do NOT push the tag until you've
-                        # verified make demo against the live API
-git remote add origin https://github.com/<you>/DiagForge.git
-git push -u origin main
+git tag -a v0.1.0 -m "v0.1.0 — Phase 0-Lite shipped"
 git push origin v0.1.0
 ```

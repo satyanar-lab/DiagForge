@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "Open-source root-cause co-pilot for vehicle diagnostic trouble codes"
 authors = ["satyanar-lab <satyanar@mtu.edu>"]
 license = "MIT"
-readme = "claude/README.md"
+readme = "README.md"
 packages = [{ include = "diagforge" }]
 
 [tool.poetry.dependencies]
