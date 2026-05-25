@@ -1,0 +1,134 @@
+name: DiagForge PR analysis
+
+on:
+  pull_request:
+    paths:
+      - 'examples/**'
+      - 'traces/**'
+      - '.github/workflows/diagforge-pr.yml'
+      - '.github/scripts/summarize_reports.py'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed for the `git diff` against the base ref
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: 2.4.1
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Cache poetry venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: poetry-${{ runner.os }}-py3.11-${{ hashFiles('poetry.lock') }}
+          restore-keys: |
+            poetry-${{ runner.os }}-py3.11-
+
+      - name: Install dependencies
+        run: poetry install --with dev --no-interaction
+
+      - name: Identify changed example directories
+        id: examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- examples/ traces/ \
+                    | xargs -n1 -I{} dirname {} \
+                    | sort -u \
+                    | grep -E '^(examples|traces)/[^/]+$' || true)
+          {
+            echo "dirs<<EOF"
+            echo "$changed"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "$changed" ]; then
+            echo "No example/trace directories were touched by this PR."
+          else
+            echo "Will analyse:"
+            echo "$changed"
+          fi
+
+      - name: Run DiagForge on each changed example
+        if: steps.examples.outputs.dirs != ''
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "::warning::ANTHROPIC_API_KEY secret is not set; skipping analysis."
+            exit 0
+          fi
+          mkdir -p _pr_reports
+          while IFS= read -r dir; do
+            [ -z "$dir" ] && continue
+            trace=$(find "$dir" -maxdepth 1 -type f \( -name '*.asc' -o -name '*.log' \) | head -1)
+            dtcs="$dir/dtcs.json"
+            dbc=$(find "$dir" -maxdepth 1 -type f -name '*.dbc' | head -1)
+            if [ -z "$trace" ] || [ ! -f "$dtcs" ]; then
+              echo "::notice::skipping $dir — missing trace or dtcs.json"
+              continue
+            fi
+            slug=$(basename "$dir")
+            args=(analyze "$trace" --dtcs "$dtcs" --output "_pr_reports/$slug" --window-ms 1500)
+            if [ -n "$dbc" ]; then
+              args+=(--dbc "$dbc")
+            fi
+            echo "::group::analysing $dir"
+            poetry run diagforge "${args[@]}"
+            echo "::endgroup::"
+          done <<< "${{ steps.examples.outputs.dirs }}"
+
+      - name: Build PR comment body
+        if: steps.examples.outputs.dirs != ''
+        id: comment_body
+        shell: bash
+        run: |
+          set -euo pipefail
+          reports=$(find _pr_reports -name report.json | sort)
+          if [ -z "$reports" ]; then
+            echo "No reports produced — skipping comment."
+            echo "should_comment=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          poetry run python .github/scripts/summarize_reports.py $reports > _pr_comment.md
+          echo "should_comment=true" >> "$GITHUB_OUTPUT"
+          echo "::group::comment body"
+          cat _pr_comment.md
+          echo "::endgroup::"
+
+      - name: Post comment on PR
+        if: steps.comment_body.outputs.should_comment == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
+            --body-file _pr_comment.md
+
+      - name: Upload report artefacts
+        if: steps.comment_body.outputs.should_comment == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagforge-pr-reports
+          path: _pr_reports/
+          retention-days: 14
