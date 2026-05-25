@@ -13,8 +13,8 @@ from diagforge import __version__
 from diagforge._logging import configure_logging, get_logger
 from diagforge.analyzer.timing import build_pattern_features
 from diagforge.diagnostic.agent import DiagnosticAgent, RealAnthropicClient
-from diagforge.ingestion.can_asc import AscTraceParser
 from diagforge.ingestion.dtc_json import DtcJsonParser
+from diagforge.ingestion.registry import format_for, parser_for, supported_extensions
 from diagforge.ingestion.signal_decode import SignalDecoder
 from diagforge.mitigation.library import MitigationLibrary
 from diagforge.mitigation.recommender import MitigationRecommender
@@ -82,9 +82,10 @@ def analyze(
     """Analyze a diagnostic trace and emit a DiagForge evidence bundle."""
     configure_logging(verbose=verbose)
 
-    if trace_path.suffix.lower() != ".asc":
+    if trace_path.suffix.lower() not in supported_extensions():
+        accepted = ", ".join(supported_extensions())
         click.echo(
-            f"only ASC traces are supported in Phase 0-Lite; got {trace_path.suffix}",
+            f"unsupported trace extension {trace_path.suffix!r}; accepted: {accepted}",
             err=True,
         )
         sys.exit(2)
@@ -94,7 +95,7 @@ def analyze(
         sys.exit(2)
 
     _log.info("ingesting trace %s", trace_path)
-    events = AscTraceParser().parse(trace_path)
+    events = parser_for(trace_path).parse(trace_path)
     decoder = SignalDecoder(dbc_path)
     events = decoder.decode(events)
 
@@ -108,10 +109,11 @@ def analyze(
     agent = DiagnosticAgent(client, model=model)
     recommender = MitigationRecommender(library)
 
+    trace_fmt = format_for(trace_path)
     input_info = InputInfo(
         trace_file=TraceFileInfo(
             path=str(trace_path),
-            format="asc",
+            format=trace_fmt,  # type: ignore[arg-type]
             sha256=sha256_path(trace_path),
             event_count=len(events),
             duration_us=(events[-1].timestamp_us - events[0].timestamp_us) if events else 0,

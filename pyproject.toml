@@ -13,9 +13,12 @@ click = "^8.1.7"
 pydantic = "^2.7"
 "python-can" = "^4.4"
 cantools = "^39.4"
+udsoncan = "^1.24"
 anthropic = "^0.104.1"
 pyyaml = "^6.0.1"
 jinja2 = "^3.1.4"
+matplotlib = "^3.9"
+streamlit = "^1.39"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2"
@@ -79,7 +82,13 @@ exclude = [
 ]
 
 [[tool.mypy.overrides]]
-module = ["can.*", "cantools.*"]
+module = [
+  "can.*",
+  "cantools.*",
+  "udsoncan.*",
+  "matplotlib.*",
+  "streamlit.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
