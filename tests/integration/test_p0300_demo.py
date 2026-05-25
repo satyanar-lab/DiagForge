@@ -9,7 +9,6 @@ the canonical schema models.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -25,45 +24,51 @@ EXAMPLE_DIR = Path(__file__).resolve().parents[2] / "examples" / "p0300_intermit
 
 
 class _FakeAnthropicClient:
-    """Returns a canned diagnostic JSON that cites the expected finding."""
+    """Returns a canned tool_use input that cites the expected finding."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def create_message(self, *, system: str, user: str, model: str, max_tokens: int) -> str:
-        self.calls.append({"system": system, "user": user, "model": model})
-        # extract the verbatim finding from the prompt so the citation always matches
+    def call_with_tool(
+        self,
+        *,
+        system: str,
+        user: str,
+        model: str,
+        max_tokens: int,
+        tool: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.calls.append({"system": system, "user": user, "model": model, "tool": tool["name"]})
+        # Extract the verbatim finding from the prompt so the citation always matches.
         marker = '"engine_rpm dropped 4 time(s)'
         if marker in user:
             finding = user[user.index(marker) : user.index('"', user.index(marker) + 1)]
             finding = finding.strip('"')
         else:
             finding = "engine_rpm dropped 4 time(s)"
-        return json.dumps(
-            {
-                "hypotheses": [
-                    {
-                        "rank": 1,
-                        "description": "Insufficient misfire dematuration timer",
-                        "confidence": "high",
-                        "evidence": [finding],
-                        "suggested_pattern_id": "dematuration_timer",
-                        "reasoning": (
-                            "Short, repeated RPM sags pass a single-shot misfire "
-                            "threshold; a dematuration timer would suppress them."
-                        ),
-                    },
-                    {
-                        "rank": 2,
-                        "description": "Fuel pressure transient",
-                        "confidence": "low",
-                        "evidence": [finding],
-                        "suggested_pattern_id": None,
-                        "reasoning": "Would need fuel-rail trace to confirm.",
-                    },
-                ]
-            }
-        )
+        return {
+            "hypotheses": [
+                {
+                    "rank": 1,
+                    "description": "Insufficient misfire dematuration timer",
+                    "confidence": "high",
+                    "evidence": [finding],
+                    "suggested_pattern_id": "dematuration_timer",
+                    "reasoning": (
+                        "Short, repeated RPM sags pass a single-shot misfire "
+                        "threshold; a dematuration timer would suppress them."
+                    ),
+                },
+                {
+                    "rank": 2,
+                    "description": "Fuel pressure transient",
+                    "confidence": "low",
+                    "evidence": [finding],
+                    "suggested_pattern_id": None,
+                    "reasoning": "Would need fuel-rail trace to confirm.",
+                },
+            ]
+        }
 
 
 @pytest.fixture

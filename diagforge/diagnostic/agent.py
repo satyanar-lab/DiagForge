@@ -1,16 +1,21 @@
-"""Diagnostic agent — calls Claude, validates, retries on missing-evidence.
+"""Diagnostic agent — calls Claude via tool_use, validates, retries on missing evidence.
 
-The agent is the single LLM-facing component. Every external call is mediated
-by `AnthropicClient` so tests can substitute a deterministic fake. On any
-failure path the raw model response is logged (truncated) and a typed
-exception is raised — silent dropping of API output is explicitly forbidden
-in CLAUDE.md.
+Claude 4-series models do not support assistant-message prefill; instead, we
+force structured output by declaring a single Anthropic `tool` whose JSON
+schema matches the diagnostic-result shape and constraining the model to
+call it via `tool_choice`. The model's tool input is returned as a dict,
+parsed and validated through pydantic exactly as before.
+
+Every external call goes through `AnthropicClient` so tests can substitute a
+deterministic fake. On any failure path the raw response is logged
+(truncated) and a typed exception is raised — silent dropping of API output
+is explicitly forbidden in CLAUDE.md.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Protocol
+from typing import Any, Final, Protocol
 
 from pydantic import ValidationError
 
@@ -30,6 +35,57 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 FALLBACK_MODEL = "claude-opus-4-7"
 MAX_RESPONSE_TOKENS = 2048
 
+#: Tool name the model is forced to call. Stable identifier — bump if the
+#: input_schema changes in a way that would shift model behavior.
+DIAGNOSTIC_TOOL_NAME: Final[str] = "submit_diagnostic_result"
+
+#: Anthropic tool definition. The input_schema mirrors the relevant subset of
+#: report-schema.json (Hypothesis fields). Model fields (model name, version,
+#: prompt template version, prompt hash) are stamped on by the agent itself
+#: after the tool fires, since the model has no business asserting them.
+DIAGNOSTIC_TOOL: Final[dict[str, Any]] = {
+    "name": DIAGNOSTIC_TOOL_NAME,
+    "description": (
+        "Submit ranked root-cause hypotheses for the DTC under investigation. "
+        "Each hypothesis MUST cite at least one string from notable_findings "
+        "verbatim in its `evidence` array."
+    ),
+    "input_schema": {
+        "type": "object",
+        "required": ["hypotheses"],
+        "additionalProperties": False,
+        "properties": {
+            "hypotheses": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "required": [
+                        "rank",
+                        "description",
+                        "confidence",
+                        "evidence",
+                        "reasoning",
+                    ],
+                    "additionalProperties": False,
+                    "properties": {
+                        "rank": {"type": "integer", "minimum": 1},
+                        "description": {"type": "string"},
+                        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                        "evidence": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {"type": "string"},
+                        },
+                        "suggested_pattern_id": {"type": ["string", "null"]},
+                        "reasoning": {"type": "string"},
+                    },
+                },
+            }
+        },
+    },
+}
+
 
 class DiagnosticError(Exception):
     """Base class for all diagnostic-agent failures."""
@@ -46,48 +102,68 @@ class EvidenceMissingError(DiagnosticError):
 class AnthropicClient(Protocol):
     """Minimal seam between DiagForge and the Anthropic SDK.
 
-    A concrete implementation calls `messages.create`; the test fake returns
-    canned JSON without any network traffic.
+    A concrete implementation forces a single tool call via `tool_choice` and
+    returns the tool input dict. The test fake returns canned dicts without
+    any network traffic.
     """
 
-    def create_message(
-        self, *, system: str, user: str, model: str, max_tokens: int
-    ) -> str:  # pragma: no cover - protocol
+    def call_with_tool(
+        self,
+        *,
+        system: str,
+        user: str,
+        model: str,
+        max_tokens: int,
+        tool: dict[str, Any],
+    ) -> dict[str, Any]:  # pragma: no cover - protocol
         ...
 
 
 class RealAnthropicClient:
-    """Thin wrapper over `anthropic.Anthropic` that returns the raw assistant text."""
+    """Thin wrapper over `anthropic.Anthropic` that returns a forced tool_use input."""
 
     def __init__(self, api_key: str | None = None) -> None:
         from anthropic import Anthropic
 
         self._client = Anthropic(api_key=api_key) if api_key else Anthropic()
 
-    def create_message(self, *, system: str, user: str, model: str, max_tokens: int) -> str:
-        resp = self._client.messages.create(
+    def call_with_tool(
+        self,
+        *,
+        system: str,
+        user: str,
+        model: str,
+        max_tokens: int,
+        tool: dict[str, Any],
+    ) -> dict[str, Any]:
+        # The SDK's `tools` / `tool_choice` parameters are typed as a sealed
+        # union of TypedDicts whose shape matches what we build dynamically.
+        # mypy can't bridge the dict[str, Any] → TypedDict gap, so suppress
+        # the overload check on this one call.
+        resp = self._client.messages.create(  # type: ignore[call-overload]
             model=model,
             max_tokens=max_tokens,
             system=system,
-            messages=[
-                {"role": "user", "content": user},
-                {"role": "assistant", "content": "{"},
-            ],
+            messages=[{"role": "user", "content": user}],
+            tools=[tool],
+            tool_choice={"type": "tool", "name": tool["name"]},
             temperature=0.0,
         )
-        # Pre-fill of "{" pushes the model into JSON immediately; rejoin it here.
-        text_parts: list[str] = []
         for block in resp.content:
-            if hasattr(block, "text"):
-                text_parts.append(block.text)
-        body = "".join(text_parts)
-        # Strip any markdown fence the model may still emit despite the system prompt.
-        body = body.strip()
-        if body.startswith("```"):
-            body = body.split("\n", 1)[1] if "\n" in body else body[3:]
-        if body.endswith("```"):
-            body = body.rsplit("```", 1)[0]
-        return "{" + body if not body.lstrip().startswith("{") else body
+            if (
+                getattr(block, "type", None) == "tool_use"
+                and getattr(block, "name", None) == tool["name"]
+            ):
+                tool_input = getattr(block, "input", None)
+                if not isinstance(tool_input, dict):
+                    raise ValueError(
+                        f"tool_use block had non-dict input: {type(tool_input).__name__}"
+                    )
+                return dict(tool_input)
+        observed = [getattr(b, "type", "?") for b in resp.content]
+        raise ValueError(
+            f"model did not call tool {tool['name']!r}; got content block types {observed}"
+        )
 
 
 def _truncate(s: str, n: int = 500) -> str:
@@ -95,7 +171,7 @@ def _truncate(s: str, n: int = 500) -> str:
 
 
 class DiagnosticAgent:
-    """Build a prompt → call the model → parse → validate evidence → maybe retry."""
+    """Build a prompt → call the model via tool_use → validate → maybe retry."""
 
     def __init__(
         self,
@@ -136,33 +212,44 @@ class DiagnosticAgent:
         return result
 
     def _one_shot(self, features: PatternFeatures, user_prompt: str) -> DiagnosticResult:
-        raw = self._client.create_message(
-            system=SYSTEM_PROMPT,
-            user=user_prompt,
-            model=self.model,
-            max_tokens=self.max_response_tokens,
-        )
+        try:
+            raw = self._client.call_with_tool(
+                system=SYSTEM_PROMPT,
+                user=user_prompt,
+                model=self.model,
+                max_tokens=self.max_response_tokens,
+                tool=DIAGNOSTIC_TOOL,
+            )
+        except ValueError as exc:
+            # Client refused the tool call or returned an unusable shape.
+            _log.error("client refused tool call: %s", exc)
+            raise DiagnosticParseError(f"non-JSON response: {exc}") from exc
         return self._parse(raw, features, user_prompt)
 
-    def _parse(self, raw: str, features: PatternFeatures, user_prompt: str) -> DiagnosticResult:
-        try:
-            blob = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            _log.error("model returned non-JSON response: %s", _truncate(raw))
-            raise DiagnosticParseError(f"non-JSON response: {exc}") from exc
-
-        if not isinstance(blob, dict) or "hypotheses" not in blob:
-            _log.error("model response missing 'hypotheses': %s", _truncate(raw))
+    def _parse(
+        self,
+        raw: dict[str, Any],
+        features: PatternFeatures,
+        user_prompt: str,
+    ) -> DiagnosticResult:
+        # features is reserved for hypothesis-level cross-checks in Phase 0.
+        _ = features
+        if not isinstance(raw, dict) or "hypotheses" not in raw:
+            _log.error("tool input missing 'hypotheses': %s", _truncate(json.dumps(raw)))
             raise DiagnosticParseError("response missing top-level 'hypotheses' array")
 
         try:
-            hypotheses = [Hypothesis.model_validate(h) for h in blob["hypotheses"]]
+            hypotheses = [Hypothesis.model_validate(h) for h in raw["hypotheses"]]
         except ValidationError as exc:
-            _log.error("hypotheses failed validation: %s\nraw=%s", exc, _truncate(raw))
+            _log.error(
+                "hypotheses failed validation: %s\nraw=%s",
+                exc,
+                _truncate(json.dumps(raw)),
+            )
             raise DiagnosticParseError(f"hypothesis validation failed: {exc}") from exc
 
         if not hypotheses:
-            _log.error("model returned zero hypotheses: %s", _truncate(raw))
+            _log.error("model returned zero hypotheses: %s", _truncate(json.dumps(raw)))
             raise DiagnosticParseError("zero hypotheses returned")
 
         return DiagnosticResult(

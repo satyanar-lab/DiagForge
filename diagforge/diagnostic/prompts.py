@@ -25,15 +25,16 @@ SYSTEM_PROMPT = textwrap.dedent(
     only reason from that analyzer output and the standard diagnostic
     knowledge of UDS (ISO 14229), OBD-II (ISO 15031), and J1939.
 
-    Rules:
-    1. Respond with one valid JSON object that matches the user-supplied
-       schema. No prose before or after.
-    2. Every hypothesis's `evidence` array MUST cite at least one string
+    You must respond by calling the `submit_diagnostic_result` tool. Do
+    not respond in plain text.
+
+    Rules for the tool input:
+    1. Every hypothesis's `evidence` array MUST cite at least one string
        quoted verbatim from `notable_findings`. Do not paraphrase.
-    3. Never fabricate numbers, signal names, or ISO clause numbers.
-    4. If a mitigation pattern from the supplied list fits, name it in
+    2. Never fabricate numbers, signal names, or ISO clause numbers.
+    3. If a mitigation pattern from the supplied list fits, name it in
        `suggested_pattern_id` exactly; otherwise use null.
-    5. Rank hypotheses 1..N with 1 = most likely.
+    4. Rank hypotheses 1..N with 1 = most likely.
     """
 ).strip()
 
@@ -70,19 +71,9 @@ def build_diagnostic_prompt(
         Available mitigation pattern IDs (use exactly one of these or null):
         {patterns_blob}
 
-        Respond with a single JSON object of the form:
-        {{
-          "hypotheses": [
-            {{
-              "rank": 1,
-              "description": "short title",
-              "confidence": "low" | "medium" | "high",
-              "evidence": ["<verbatim string from notable_findings>"],
-              "suggested_pattern_id": "<one of the available IDs, or null>",
-              "reasoning": "1-3 sentences"
-            }}
-          ]
-        }}{extra}
+        Call the `submit_diagnostic_result` tool with your ranked hypotheses.
+        Each hypothesis's `evidence` array must quote at least one string
+        verbatim from notable_findings above.{extra}
         """
     ).strip()
 

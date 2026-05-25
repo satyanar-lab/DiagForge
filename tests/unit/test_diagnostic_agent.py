@@ -1,13 +1,21 @@
-"""Unit tests for the diagnostic agent. The Anthropic client is mocked."""
+"""Unit tests for the diagnostic agent. The Anthropic client is mocked.
+
+After the refactor to tool_use, the client returns a dict (the tool input)
+instead of a JSON string. The "non-JSON" failure mode is replaced by the
+"client refused the tool call" path (the client raises ValueError, which the
+agent wraps as DiagnosticParseError).
+"""
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 
 from diagforge.diagnostic.agent import (
+    DIAGNOSTIC_TOOL,
+    DIAGNOSTIC_TOOL_NAME,
     DiagnosticAgent,
     DiagnosticParseError,
     EvidenceMissingError,
@@ -44,15 +52,34 @@ def _dtc() -> DTCSnapshot:
 
 
 class _CannedClient:
-    """Test double — returns a sequence of canned responses."""
+    """Test double — returns a sequence of canned tool_use inputs.
 
-    def __init__(self, responses: list[str | Exception]) -> None:
+    Each item is either:
+    * a dict — returned directly as the tool input
+    * an Exception — raised when the client is called
+    """
+
+    def __init__(self, responses: list[dict[str, Any] | Exception]) -> None:
         self._responses = list(responses)
-        self.call_log: list[dict[str, str | int]] = []
+        self.call_log: list[dict[str, Any]] = []
 
-    def create_message(self, *, system: str, user: str, model: str, max_tokens: int) -> str:
+    def call_with_tool(
+        self,
+        *,
+        system: str,
+        user: str,
+        model: str,
+        max_tokens: int,
+        tool: dict[str, Any],
+    ) -> dict[str, Any]:
         self.call_log.append(
-            {"system": system, "user": user, "model": model, "max_tokens": max_tokens}
+            {
+                "system": system,
+                "user": user,
+                "model": model,
+                "max_tokens": max_tokens,
+                "tool": tool,
+            }
         )
         if not self._responses:
             raise AssertionError("client called more times than responses provided")
@@ -62,21 +89,19 @@ class _CannedClient:
         return item
 
 
-def _good_response_citing(finding: str) -> str:
-    return json.dumps(
-        {
-            "hypotheses": [
-                {
-                    "rank": 1,
-                    "description": "intermittent rpm dropout",
-                    "confidence": "medium",
-                    "evidence": [finding],
-                    "suggested_pattern_id": "dematuration_timer",
-                    "reasoning": "Brief drops near idle threshold suggest a missing dematuration timer.",
-                }
-            ]
-        }
-    )
+def _good_response_citing(finding: str) -> dict[str, Any]:
+    return {
+        "hypotheses": [
+            {
+                "rank": 1,
+                "description": "intermittent rpm dropout",
+                "confidence": "medium",
+                "evidence": [finding],
+                "suggested_pattern_id": "dematuration_timer",
+                "reasoning": "Brief drops near idle threshold suggest a missing dematuration timer.",
+            }
+        ]
+    }
 
 
 class TestHappyPath:
@@ -88,42 +113,48 @@ class TestHappyPath:
         assert out.prompt_template_version == PROMPT_TEMPLATE_VERSION
         assert out.hypotheses[0].suggested_pattern_id == "dematuration_timer"
         assert len(client.call_log) == 1
+        # the tool definition is passed through on every call
+        assert client.call_log[0]["tool"]["name"] == DIAGNOSTIC_TOOL_NAME
+
+    def test_tool_definition_constrains_confidence_enum(self) -> None:
+        schema = DIAGNOSTIC_TOOL["input_schema"]
+        item = schema["properties"]["hypotheses"]["items"]
+        assert item["properties"]["confidence"]["enum"] == ["low", "medium", "high"]
 
 
 class TestParseFailures:
-    def test_non_json_response_raises_parse_error(self) -> None:
-        client = _CannedClient(["not json at all"])
+    def test_tool_not_called_raises_parse_error(self) -> None:
+        """When the model returns content with no matching tool_use block."""
+        client = _CannedClient([ValueError("model did not call tool 'submit_diagnostic_result'")])
         agent = DiagnosticAgent(client)
         with pytest.raises(DiagnosticParseError, match="non-JSON"):
             agent.propose(_dtc(), _features(), [])
 
     def test_missing_hypotheses_key_raises(self) -> None:
-        client = _CannedClient(['{"results": []}'])
+        client = _CannedClient([{"results": []}])
         agent = DiagnosticAgent(client)
         with pytest.raises(DiagnosticParseError, match="missing top-level"):
             agent.propose(_dtc(), _features(), [])
 
     def test_empty_hypotheses_raises(self) -> None:
-        client = _CannedClient(['{"hypotheses": []}'])
+        client = _CannedClient([{"hypotheses": []}])
         agent = DiagnosticAgent(client)
         with pytest.raises(DiagnosticParseError, match="zero hypotheses"):
             agent.propose(_dtc(), _features(), [])
 
     def test_hypothesis_with_bad_confidence_raises(self) -> None:
-        bad = json.dumps(
-            {
-                "hypotheses": [
-                    {
-                        "rank": 1,
-                        "description": "x",
-                        "confidence": "definitely",
-                        "evidence": [FINDING_A],
-                        "suggested_pattern_id": None,
-                        "reasoning": "y",
-                    }
-                ]
-            }
-        )
+        bad = {
+            "hypotheses": [
+                {
+                    "rank": 1,
+                    "description": "x",
+                    "confidence": "definitely",
+                    "evidence": [FINDING_A],
+                    "suggested_pattern_id": None,
+                    "reasoning": "y",
+                }
+            ]
+        }
         client = _CannedClient([bad])
         agent = DiagnosticAgent(client)
         with pytest.raises(DiagnosticParseError, match="validation"):
@@ -132,20 +163,18 @@ class TestParseFailures:
 
 class TestMissingEvidenceRetry:
     def test_retry_succeeds_on_second_attempt(self) -> None:
-        bad = json.dumps(
-            {
-                "hypotheses": [
-                    {
-                        "rank": 1,
-                        "description": "x",
-                        "confidence": "low",
-                        "evidence": ["I just made this up"],
-                        "suggested_pattern_id": None,
-                        "reasoning": "guessing",
-                    }
-                ]
-            }
-        )
+        bad = {
+            "hypotheses": [
+                {
+                    "rank": 1,
+                    "description": "x",
+                    "confidence": "low",
+                    "evidence": ["I just made this up"],
+                    "suggested_pattern_id": None,
+                    "reasoning": "guessing",
+                }
+            ]
+        }
         client = _CannedClient([bad, _good_response_citing(FINDING_A)])
         agent = DiagnosticAgent(client)
         out = agent.propose(_dtc(), _features(), [])
@@ -155,20 +184,18 @@ class TestMissingEvidenceRetry:
         assert out.hypotheses[0].evidence == [FINDING_A]
 
     def test_retry_failure_raises_evidence_missing(self) -> None:
-        bad = json.dumps(
-            {
-                "hypotheses": [
-                    {
-                        "rank": 1,
-                        "description": "x",
-                        "confidence": "low",
-                        "evidence": ["fabricated"],
-                        "suggested_pattern_id": None,
-                        "reasoning": "z",
-                    }
-                ]
-            }
-        )
+        bad = {
+            "hypotheses": [
+                {
+                    "rank": 1,
+                    "description": "x",
+                    "confidence": "low",
+                    "evidence": ["fabricated"],
+                    "suggested_pattern_id": None,
+                    "reasoning": "z",
+                }
+            ]
+        }
         client = _CannedClient([bad, bad])
         agent = DiagnosticAgent(client)
         with pytest.raises(EvidenceMissingError, match="Retry exhausted"):
@@ -177,30 +204,35 @@ class TestMissingEvidenceRetry:
 
     def test_only_one_retry_on_evidence_miss(self) -> None:
         """Confirms we don't loop on persistent failures."""
-        bad = json.dumps(
-            {
-                "hypotheses": [
-                    {
-                        "rank": 1,
-                        "description": "x",
-                        "confidence": "low",
-                        "evidence": ["fabricated"],
-                        "suggested_pattern_id": None,
-                        "reasoning": "z",
-                    }
-                ]
-            }
-        )
+        bad = {
+            "hypotheses": [
+                {
+                    "rank": 1,
+                    "description": "x",
+                    "confidence": "low",
+                    "evidence": ["fabricated"],
+                    "suggested_pattern_id": None,
+                    "reasoning": "z",
+                }
+            ]
+        }
 
         calls = 0
 
-        def respond(*, system: str, user: str, model: str, max_tokens: int) -> str:
+        def respond(
+            *,
+            system: str,
+            user: str,
+            model: str,
+            max_tokens: int,
+            tool: dict[str, Any],
+        ) -> dict[str, Any]:
             nonlocal calls
             calls += 1
             return bad
 
         class _C:
-            create_message: Callable[..., str] = staticmethod(respond)
+            call_with_tool: Callable[..., dict[str, Any]] = staticmethod(respond)
 
         agent = DiagnosticAgent(_C())
         with pytest.raises(EvidenceMissingError):
@@ -219,20 +251,18 @@ class TestTimeoutPropagation:
 class TestPatternIdAcceptance:
     def test_unknown_pattern_id_passes_through(self) -> None:
         """The agent does not validate suggested_pattern_id — the recommender does."""
-        resp = json.dumps(
-            {
-                "hypotheses": [
-                    {
-                        "rank": 1,
-                        "description": "x",
-                        "confidence": "low",
-                        "evidence": [FINDING_A],
-                        "suggested_pattern_id": "this_pattern_does_not_exist",
-                        "reasoning": "still valid output",
-                    }
-                ]
-            }
-        )
+        resp = {
+            "hypotheses": [
+                {
+                    "rank": 1,
+                    "description": "x",
+                    "confidence": "low",
+                    "evidence": [FINDING_A],
+                    "suggested_pattern_id": "this_pattern_does_not_exist",
+                    "reasoning": "still valid output",
+                }
+            ]
+        }
         client = _CannedClient([resp])
         agent = DiagnosticAgent(client)
         out = agent.propose(_dtc(), _features(), ["dematuration_timer"])
@@ -249,3 +279,5 @@ class TestPrompt:
         assert "P0300" in user
         assert FINDING_A in user
         assert "dematuration_timer" in user
+        # The prompt now instructs the model to call the tool by name.
+        assert DIAGNOSTIC_TOOL_NAME in user
