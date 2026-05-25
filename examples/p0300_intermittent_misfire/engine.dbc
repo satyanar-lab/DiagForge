@@ -1,0 +1,13 @@
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: ECM
+
+BO_ 256 EngineStatus: 8 ECM
+ SG_ engine_rpm : 0|16@1+ (0.25,0) [0|16383.75] "rpm" Vector__XXX
+
+CM_ BO_ 256 "Engine status, 100 Hz broadcast from the ECM";
+CM_ SG_ 256 engine_rpm "Crankshaft speed in revolutions per minute (0.25 RPM/bit)";

@@ -36,6 +36,7 @@ demo:
 	$(POETRY) run diagforge analyze \
 		examples/p0300_intermittent_misfire/trace.asc \
 		--dtcs examples/p0300_intermittent_misfire/dtcs.json \
+		--dbc  examples/p0300_intermittent_misfire/engine.dbc \
 		--output ./demo-output/
 
 build:

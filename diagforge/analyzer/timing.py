@@ -109,6 +109,12 @@ def detect_transition_anomalies(
     Sliding window of `window_us` over the samples. If any window contains
     more than `transition_threshold` value-changes, that window is reported
     as a `debounce_candidate` anomaly.
+
+    This detector is intended for **discrete** signals (switches, valves):
+    if the signal's natural transition rate already exceeds the threshold
+    (i.e. it is analog and changes most frames), the detector short-circuits
+    so that legitimate engine RPM / coolant temperature noise doesn't drown
+    the report in bogus debounce candidates.
     """
     samples = _samples(events, signal_name)
     if len(samples) < 2:
@@ -118,6 +124,14 @@ def detect_transition_anomalies(
         b[0] for a, b in pairwise(samples) if a[1] != b[1]
     ]  # timestamps of changes
     if not transitions:
+        return []
+
+    # Heuristic: skip analog-shaped signals. A discrete signal (switch, valve)
+    # has a small finite codomain; an analog signal (RPM, voltage, temperature)
+    # takes many distinct values. The bounce detector is the wrong tool for
+    # the analog case — `detect_value_anomalies` handles those.
+    unique_values = {v for _, v in samples}
+    if len(unique_values) > 10:
         return []
 
     anomalies: list[TransitionAnomaly] = []
@@ -374,7 +388,14 @@ def _build_notable_findings(
                 f"durations (ms) {durations_ms}"
             )
 
+    # Group transition-class anomalies by (signal, anomaly_type) so we emit one
+    # summary per group instead of one per overlapping sub-window.
+    seen_groups: set[tuple[str, str]] = set()
     for a in transition_anomalies:
+        key = (a.signal_name, a.anomaly_type)
+        if key in seen_groups:
+            continue
+        seen_groups.add(key)
         if a.anomaly_type == "debounce_candidate":
             findings.append(f"{a.signal_name} bounce burst: {a.description}")
         elif a.anomaly_type == "power_cycle_burst":
@@ -389,12 +410,25 @@ def _build_notable_findings(
 
 
 def _estimate_duration_ms(anomaly: TransitionAnomaly) -> int:
-    """Best-effort millisecond duration extracted from the anomaly description."""
-    desc = anomaly.description
-    for tok in desc.split():
-        if tok.endswith("ms"):
+    """Best-effort millisecond duration extracted from the anomaly description.
+
+    Looks for the first `for <N>ms` phrase; falls back to the first `<N>ms`
+    token. Trailing punctuation is stripped so `for 30ms;` parses to 30.
+    """
+    tokens = anomaly.description.split()
+    for i, tok in enumerate(tokens):
+        if tok == "for" and i + 1 < len(tokens):
+            candidate = tokens[i + 1].rstrip(",.;:")
+            if candidate.endswith("ms"):
+                try:
+                    return int(round(float(candidate[:-2])))
+                except ValueError:
+                    continue
+    for tok in tokens:
+        candidate = tok.rstrip(",.;:")
+        if candidate.endswith("ms"):
             try:
-                return int(round(float(tok[:-2])))
+                return int(round(float(candidate[:-2])))
             except ValueError:
                 continue
     return 0

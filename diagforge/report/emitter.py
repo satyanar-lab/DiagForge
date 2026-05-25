@@ -42,19 +42,26 @@ def _sha256_file(path: Path) -> str:
 
 
 def _uuid7() -> str:
-    """Generate a UUIDv7 (time-ordered). We need v7 because the schema demands it."""
+    """Generate a UUIDv7 string (RFC 9562). The schema requires v7 — time-ordered."""
     ts_ms = int(dt.datetime.now(tz=dt.UTC).timestamp() * 1000)
-    rand_a = int.from_bytes(os.urandom(2), "big") & 0x0FFF
-    rand_b = int.from_bytes(os.urandom(8), "big") & 0x3FFFFFFFFFFFFFFF
-    high = (ts_ms & 0xFFFFFFFFFFFF) << 16 | 0x7000 | rand_a
-    low = 0x8000_0000_0000_0000 | rand_b
-    return f"{high:032x}"[:32] and (
-        f"{high >> 64 & 0xFFFFFFFF:08x}-"
-        f"{high >> 48 & 0xFFFF:04x}-"
-        f"{high >> 32 & 0xFFFF:04x}-"
-        f"{low >> 48 & 0xFFFF:04x}-"
-        f"{low & 0xFFFFFFFFFFFF:012x}"
-    )
+    rand = os.urandom(10)
+    b = bytearray(16)
+    # 48-bit unix millisecond timestamp, big-endian.
+    b[0] = (ts_ms >> 40) & 0xFF
+    b[1] = (ts_ms >> 32) & 0xFF
+    b[2] = (ts_ms >> 24) & 0xFF
+    b[3] = (ts_ms >> 16) & 0xFF
+    b[4] = (ts_ms >> 8) & 0xFF
+    b[5] = ts_ms & 0xFF
+    # 4-bit version (7) followed by 12 bits of rand_a.
+    b[6] = 0x70 | (rand[0] & 0x0F)
+    b[7] = rand[1]
+    # 2-bit variant (10) followed by 62 bits of rand_b.
+    b[8] = 0x80 | (rand[2] & 0x3F)
+    b[9] = rand[3]
+    b[10:16] = rand[4:10]
+    s = b.hex()
+    return f"{s[0:8]}-{s[8:12]}-{s[12:16]}-{s[16:20]}-{s[20:32]}"
 
 
 class ReportEmitter:
