@@ -289,6 +289,52 @@ def detect_power_cycle_bursts(
     ]
 
 
+def detect_communication_gaps(
+    events: Sequence[TraceEvent],
+    signal_name: str,
+    gap_multiplier: float = 5.0,
+    min_gap_ms: int = 50,
+) -> list[TransitionAnomaly]:
+    """Flag inter-sample intervals that are much longer than typical.
+
+    A communication gap is reported when two consecutive samples of
+    `signal_name` are separated by more than `max(gap_multiplier × median_interval,
+    min_gap_ms)`. This is how lost-communication DTCs (U0100 family) surface
+    in a trace — the publishing ECU went quiet for hundreds of milliseconds.
+
+    Returns one anomaly per gap, each carrying the gap duration in its
+    description so the recommender can derive a timeout suggestion.
+    """
+    samples = _samples(events, signal_name)
+    if len(samples) < 4:
+        return []
+    intervals_us = _intervals_us(samples)
+    if not intervals_us:
+        return []
+    median_us = statistics.median(intervals_us)
+    if median_us <= 0:
+        return []
+    threshold_us = max(gap_multiplier * median_us, min_gap_ms * 1_000)
+    anomalies: list[TransitionAnomaly] = []
+    for (ts_before, _), (ts_after, _) in pairwise(samples):
+        gap = ts_after - ts_before
+        if gap <= threshold_us:
+            continue
+        anomalies.append(
+            TransitionAnomaly(
+                signal_name=signal_name,
+                anomaly_type="communication_gap",
+                description=(
+                    f"{signal_name} silent for {gap / 1000:.0f}ms "
+                    f"(median publish interval {median_us / 1000:.1f}ms, "
+                    f"threshold {threshold_us / 1000:.0f}ms)"
+                ),
+                evidence_us=[ts_before, ts_after],
+            )
+        )
+    return anomalies
+
+
 def _slice_to_window(
     events: Sequence[TraceEvent], dtc: DTCSnapshot, window_us: int
 ) -> list[TraceEvent]:
@@ -333,9 +379,13 @@ def build_pattern_features(
     for s in signals:
         values.extend(detect_value_anomalies(window, s, window_us=window_us))
 
-    all_anomalies = transitions + values
+    gaps: list[TransitionAnomaly] = []
+    for s in signals:
+        gaps.extend(detect_communication_gaps(window, s))
 
-    findings = _build_notable_findings(values, transitions, dtc_snapshot, window_us)
+    all_anomalies = transitions + values + gaps
+
+    findings = _build_notable_findings(values, transitions + gaps, dtc_snapshot, window_us)
 
     return PatternFeatures(
         window_us=window_us,
@@ -388,10 +438,26 @@ def _build_notable_findings(
                 f"durations (ms) {durations_ms}"
             )
 
+    # Aggregate communication gaps into one finding per signal — multiple
+    # individual gap descriptions would clutter the LLM prompt, but the LLM
+    # needs to see the count, the magnitudes, and the publish baseline.
+    for signal, gap_anoms in _group_runs_by_signal(
+        [a for a in transition_anomalies if a.anomaly_type == "communication_gap"]
+    ).items():
+        if not gap_anoms:
+            continue
+        durations_ms = sorted(_estimate_duration_ms(a) for a in gap_anoms)
+        findings.append(
+            f"{signal} had {len(gap_anoms)} communication gap(s) within "
+            f"{window_us // 1000}ms of the DTC window — gap durations (ms) {durations_ms}"
+        )
+
     # Group transition-class anomalies by (signal, anomaly_type) so we emit one
     # summary per group instead of one per overlapping sub-window.
     seen_groups: set[tuple[str, str]] = set()
     for a in transition_anomalies:
+        if a.anomaly_type == "communication_gap":
+            continue  # handled above
         key = (a.signal_name, a.anomaly_type)
         if key in seen_groups:
             continue
@@ -412,13 +478,16 @@ def _build_notable_findings(
 def _estimate_duration_ms(anomaly: TransitionAnomaly) -> int:
     """Best-effort millisecond duration extracted from the anomaly description.
 
-    Looks for the first `for <N>ms` phrase; falls back to the first `<N>ms`
-    token. Trailing punctuation is stripped so `for 30ms;` parses to 30.
+    Looks first for `for <N>ms`, then `silent for <N>ms` (communication-gap
+    shape), then any `<N>ms` token. Trailing punctuation is stripped so
+    `for 30ms;` parses to 30.
     """
     tokens = anomaly.description.split()
     for i, tok in enumerate(tokens):
-        if tok == "for" and i + 1 < len(tokens):
+        if tok in ("for", "silent") and i + 1 < len(tokens):
             candidate = tokens[i + 1].rstrip(",.;:")
+            if candidate == "for" and i + 2 < len(tokens):
+                candidate = tokens[i + 2].rstrip(",.;:")
             if candidate.endswith("ms"):
                 try:
                     return int(round(float(candidate[:-2])))

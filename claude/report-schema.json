@@ -109,7 +109,13 @@
                 "properties": {
                   "signal_name": { "type": "string" },
                   "anomaly_type": {
-                    "enum": ["debounce_candidate", "power_cycle_burst", "signal_dropout", "value_spike"]
+                    "enum": [
+                      "debounce_candidate",
+                      "power_cycle_burst",
+                      "signal_dropout",
+                      "value_spike",
+                      "communication_gap"
+                    ]
                   },
                   "description": { "type": "string" },
                   "evidence_us": { "type": "array", "items": { "type": "integer" } }

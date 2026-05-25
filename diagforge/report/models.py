@@ -21,7 +21,13 @@ SCHEMA_VERSION: Literal["1.0.0"] = "1.0.0"
 _UUID_V7_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 TraceFormat = Literal["asc", "blf", "log", "csv"]
-AnomalyType = Literal["debounce_candidate", "power_cycle_burst", "signal_dropout", "value_spike"]
+AnomalyType = Literal[
+    "debounce_candidate",
+    "power_cycle_burst",
+    "signal_dropout",
+    "value_spike",
+    "communication_gap",
+]
 Confidence = Literal["low", "medium", "high"]
 
 

@@ -1,0 +1,16 @@
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: ECM GATEWAY
+
+BO_ 768 EngineTemp: 8 ECM
+ SG_ engine_temp : 0|16@1+ (0.01,0) [0|655.35] "degC" Vector__XXX
+
+BO_ 512 WheelSpeed: 8 GATEWAY
+ SG_ wheel_speed : 0|16@1+ (0.01,0) [0|655.35] "kmh" Vector__XXX
+
+CM_ BO_ 768 "Engine temperature, 100 Hz broadcast from the ECM";
+CM_ BO_ 512 "Vehicle wheel speed, 50 Hz broadcast from the gateway";

@@ -91,9 +91,7 @@ class TestLibraryLoading:
             "cross_ecu_consensus",
         ],
     )
-    def test_new_pattern_has_full_schema(
-        self, library: MitigationLibrary, pattern_id: str
-    ) -> None:
+    def test_new_pattern_has_full_schema(self, library: MitigationLibrary, pattern_id: str) -> None:
         p = library.get_by_id(pattern_id)
         assert p is not None
         assert p.name
