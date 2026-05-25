@@ -157,6 +157,8 @@ class RealAnthropicClient:
         # union of TypedDicts whose shape matches what we build dynamically.
         # mypy can't bridge the dict[str, Any] → TypedDict gap, so suppress
         # the overload check on this one call.
+        # Note: no `temperature` kwarg — Claude 4.x rejects it; forced tool_use
+        # already produces deterministic structured output.
         resp = self._client.messages.create(  # type: ignore[call-overload]
             model=model,
             max_tokens=max_tokens,
@@ -164,7 +166,6 @@ class RealAnthropicClient:
             messages=[{"role": "user", "content": user}],
             tools=[tool],
             tool_choice={"type": "tool", "name": tool["name"]},
-            temperature=0.0,
         )
         # The API returns the actual resolved model in `resp.model` (e.g. a
         # date-pinned alias). Fall back to the requested model if the SDK
