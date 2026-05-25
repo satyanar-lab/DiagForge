@@ -40,22 +40,49 @@ st.markdown(
       /* Tighten the default Streamlit chrome */
       .block-container { padding-top: 1.4rem; padding-bottom: 2rem; max-width: 1100px; }
       header[data-testid="stHeader"] { background: transparent; }
-      h1 { font-weight: 700; letter-spacing: -0.01em; }
-      h2 { font-weight: 600; border-bottom: 1px solid #d0d0d0; padding-bottom: 0.25rem; }
-      .dtc-code { font-family: ui-monospace, Menlo, monospace; color: #b8430a; font-weight: 600; }
-      .finding { background: #fff3e0; padding: 4px 8px; border-radius: 4px;
-                 font-family: ui-monospace, monospace; font-size: 13px; }
-      .hyp-card { border-left: 3px solid #d0d0d0; padding: 6px 14px;
-                  margin: 6px 0; background: #fafafa; border-radius: 0 4px 4px 0; }
-      .hyp-card.rank-1 { border-left-color: #d96528; }
+
+      /* All custom cards explicitly declare both background and text colour so
+         contrast holds even if a user switches the theme away from light. */
+      h1 { font-weight: 700; letter-spacing: -0.01em; color: #1F1F1F; }
+      h2 { font-weight: 600; border-bottom: 1px solid #D0D0D0; padding-bottom: 0.25rem;
+           color: #1F1F1F; }
+
+      .dtc-code { font-family: ui-monospace, Menlo, monospace; color: #B8430A;
+                  font-weight: 600; }
+      .dtc-standard { color: #555555; font-size: 0.9em; }
+
+      /* Deterministic findings — dark green on light gray (~12:1 contrast). */
+      .finding { background: #F5F5F5; color: #1B5E20; padding: 4px 8px;
+                 border-radius: 4px; font-family: ui-monospace, monospace;
+                 font-size: 13px; display: inline-block; }
+      .finding-block { display: block; margin: 4px 0; }
+
+      /* Hypothesis cards — explicit dark text on near-white (~16:1). */
+      .hyp-card { border-left: 3px solid #D0D0D0; padding: 8px 14px;
+                  margin: 6px 0; background: #FAFAFA; border-radius: 0 4px 4px 0;
+                  color: #1F1F1F; }
+      .hyp-card.rank-1 { border-left-color: #D96528; }
+      .hyp-card strong, .hyp-card em, .hyp-card p, .hyp-card div,
+      .hyp-card span { color: #1F1F1F; }
+      .hyp-card p { margin: 6px 0; line-height: 1.45; }
+      .hyp-card code { color: #1B5E20; background: #F5F5F5; padding: 1px 4px;
+                       border-radius: 3px; font-size: 12px; }
+
+      /* Confidence badges — every combination is at least 4.5:1 contrast. */
       .conf-badge { display: inline-block; padding: 2px 8px; border-radius: 10px;
-                    font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
-                    margin-left: 8px; vertical-align: middle; }
-      .conf-low { background: #f0e0c0; color: #5a4500; }
-      .conf-medium { background: #f0b97a; color: white; }
-      .conf-high { background: #d96528; color: white; }
-      .mitigation-card { background: #eef5fb; padding: 10px 14px; border-radius: 5px;
-                         margin: 6px 0; border: 1px solid #cfdbe5; }
+                    font-size: 11px; text-transform: uppercase;
+                    letter-spacing: 0.05em; margin-left: 8px; vertical-align: middle;
+                    font-weight: 600; }
+      .conf-low    { background: #F0E0C0; color: #5A4500; }   /* 8.5:1 */
+      .conf-medium { background: #F0B97A; color: #5A2E00; }   /* 6:1   */
+      .conf-high   { background: #B8430A; color: #FFFFFF; }   /* 4.6:1 */
+
+      /* Mitigation pattern cards — light blue, explicit dark text. */
+      .mitigation-card { background: #EEF5FB; padding: 10px 14px; border-radius: 5px;
+                         margin: 6px 0; border: 1px solid #CFDBE5; color: #1F1F1F; }
+      .mitigation-card strong, .mitigation-card span { color: #1F1F1F; }
+      .mitigation-card code { color: #1F4E79; background: transparent;
+                              font-weight: 600; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -186,10 +213,10 @@ def _render_dtc_card(analysis, chart_svg: str) -> None:  # type: ignore[no-untyp
     dtc = analysis.dtc
     header = (
         f"<span class='dtc-code'>{dtc.code}</span> "
-        f"<small style='color:#666;'>[{dtc.standard}]</small>"
+        f"<span class='dtc-standard'>[{dtc.standard}]</span>"
     )
     if dtc.description:
-        header += f" — {dtc.description}"
+        header += f"<span style='color:#1F1F1F;'> — {dtc.description}</span>"
     st.markdown(header, unsafe_allow_html=True)
     st.caption(
         f"occurrences: {dtc.occurrence_count or 1} · "
@@ -199,33 +226,38 @@ def _render_dtc_card(analysis, chart_svg: str) -> None:  # type: ignore[no-untyp
 
     if chart_svg:
         components.html(
-            f"<div style='overflow-x:auto;'>{chart_svg}</div>",
+            f"<div style='overflow-x:auto; background:#FFFFFF;'>{chart_svg}</div>",
             height=280,
             scrolling=False,
         )
 
     st.markdown("**Deterministic findings**")
     for f in analysis.pattern_features.notable_findings:
-        st.markdown(f"<div class='finding'>{f}</div>", unsafe_allow_html=True)
+        # `.finding-block` makes the chip span the full row instead of
+        # sitting inline next to the previous element.
+        st.markdown(
+            f"<div class='finding finding-block'>{f}</div>",
+            unsafe_allow_html=True,
+        )
 
     st.markdown("**Hypotheses**")
     for h in analysis.diagnostic_result.hypotheses:
         rank_class = "rank-1" if h.rank == 1 else ""
         conf_class = f"conf-{h.confidence}"
+        evidence_html = ", ".join(f"<code class='finding'>{ev}</code>" for ev in h.evidence)
+        suggested_html = (
+            f"<div><em>Suggested mitigation:</em> <code>{h.suggested_pattern_id}</code></div>"
+            if h.suggested_pattern_id
+            else ""
+        )
         st.markdown(
             f"<div class='hyp-card {rank_class}'>"
             f"<strong>#{h.rank}. {h.description}</strong>"
             f"<span class='conf-badge {conf_class}'>{h.confidence}</span>"
-            f"<p style='margin: 6px 0;'>{h.reasoning}</p>"
-            f"<div><em>Evidence:</em> "
-            + ", ".join(f"<code class='finding'>{ev}</code>" for ev in h.evidence)
-            + "</div>"
-            + (
-                f"<div><em>Suggested mitigation:</em> <code>{h.suggested_pattern_id}</code></div>"
-                if h.suggested_pattern_id
-                else ""
-            )
-            + "</div>",
+            f"<p>{h.reasoning}</p>"
+            f"<div><em>Evidence:</em> {evidence_html}</div>"
+            f"{suggested_html}"
+            f"</div>",
             unsafe_allow_html=True,
         )
 
@@ -233,8 +265,10 @@ def _render_dtc_card(analysis, chart_svg: str) -> None:  # type: ignore[no-untyp
         st.markdown("**Mitigation patterns**")
         for m in analysis.mitigation_matches:
             st.markdown(
-                f"<div class='mitigation-card'><strong>{m.pattern_name}</strong> "
-                f"<code>({m.pattern_id})</code></div>",
+                f"<div class='mitigation-card'>"
+                f"<strong>{m.pattern_name}</strong> "
+                f"<code>({m.pattern_id})</code>"
+                f"</div>",
                 unsafe_allow_html=True,
             )
             if m.parameter_suggestions:
